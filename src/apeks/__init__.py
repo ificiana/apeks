@@ -26,12 +26,21 @@ MARK_VALUE = 100  # value an agent writes to the tile it stands on
 MARK_DECAY = 0.9  # per-second multiplier on written values
 MARK_FLOOR = 0.1  # relative walk weight of a tile at full value (lowest bias)
 MARK_TINT = (255, 200, 120)  # tile tint at full value
+PUSH_REACH = 5  # sensing radius in tiles
+PUSH_FLOOR_SEEK = 40  # a seeker needs this much slack (moves) to be pushed
+PUSH_FLOOR_WALK = 3
+URGENT_SLACK = 20  # seekers below this slack jump the queue
+PRESSURE_LIMIT = 4  # walkers avoid tiles with this many seekers in reach
+PUSH_REACH = 5  # sensing radius in tiles
+PUSH_FLOOR_SEEK = 40  # a seeker needs this much slack (moves) to be pushed
+PUSH_FLOOR_WALK = 3
+URGENT_SLACK = 20  # seekers below this slack jump the queue
+PRESSURE_LIMIT = 4  # walkers avoid tiles with this many seekers in reach
 SEEK_RING = (255, 200, 0)
 CHARGE_RING = (60, 220, 90)
 
 STATION_COUNT = 20
 STATION_COLOR = (190, 235, 200)
-LANE_COLOR = (235, 245, 238)  # wall tiles beside a station: exit-only
 STATION_DOT = (120, 255, 160)
 ARROW_COLOR = (30, 80, 160)
 TEXT_COLOR = (40, 40, 40)
@@ -79,6 +88,9 @@ class Agent:
         self.row = row
         self.charge: float = 6000  # U
         self.state = "walk"  # walk | seek | charge
+        self.age = 0  # steps spent seeking (queue position: older goes first)
+        self.released = False  # just finished charging, still on the station
+        self.moved = False  # already moved during this step
 
     @property
     def color(self) -> tuple[int, int, int]:
@@ -91,64 +103,189 @@ class Agent:
         self.charge = min(MAX_CHARGE, self.charge + CHARGE_RATE * dt)
         if self.charge >= MAX_CHARGE:
             self.state = "walk"
+            self.released = True
 
-    def _can_move(
-        self, dc: int, dr: int, occupied: set[Tile], nav: NavMap
-    ) -> bool:
-        col, row = self.col + dc, self.row + dr
+    def slack(self, nav: NavMap) -> float:
+        """Spare moves: charge left minus the cost of walking to a station."""
+        return self.charge / MOVE_COST - nav.dist[self.row][self.col]
+
+    def priority(self, nav: NavMap) -> tuple:
+        """Total order used to decide who yields; higher goes first.
+
+        Released station occupants, then seekers about to run dry, then
+        seekers by queue age, then walkers (least slack first).
+        """
+        if self.released:
+            return 4, 0, self.id
+        if self.state == "seek":
+            slack = self.slack(nav)
+            if slack < URGENT_SLACK:
+                return 3, -slack, self.id
+            return 2, self.age, -self.id
+        return 1, -self.slack(nav), self.id
+
+    def pushable(self, nav: NavMap, claim: tuple) -> bool:
+        """Can give way to a claimant of priority `claim`: not charging, lower
+        priority, and enough slack left to afford the detour."""
+        floor = PUSH_FLOOR_SEEK if self.state == "seek" else PUSH_FLOOR_WALK
         return (
-            0 <= col < GRID_SIZE
-            and 0 <= row < GRID_SIZE
-            and (col, row) not in occupied
-            and ((self.col, self.row), (col, row)) not in nav.blocked
+            self.state != "charge"
+            and self.priority(nav) < claim
+            and self.slack(nav) >= floor
         )
 
-    def step(
-        self,
-        occupied: set[Tile],
-        nav: NavMap,
-        trail: Trail,
-        now: float,
-    ) -> None:
+    def step(self, world: World, trail: Trail, now: float) -> None:
         """One tile move per step; a completed move costs MOVE_COST charge.
 
-        Walking is a random cardinal walk over the legal neighbours, weighted
-        toward tiles with a lower trail value. Below LOW_CHARGE the agent
-        seeks: it follows the arrow on its tile to the nearest station and
-        charges there. A blocked seeker just retries on the next step.
+        Walking is a random cardinal walk over the free neighbours, weighted
+        toward tiles with a lower trail value and kept out of queue zones.
+        Below LOW_CHARGE the agent seeks: it follows the arrow on its tile to
+        the nearest station. If a lower-priority agent is in the way, that
+        agent is pushed aside (see World.push); otherwise the seeker waits.
         """
-        if self.state == "charge" or self.charge < MOVE_COST:
+        if self.state == "charge" or self.moved or self.charge < MOVE_COST:
             return
+        nav = world.nav
+        here = (self.col, self.row)
         if self.state == "walk" and self.charge < LOW_CHARGE:
             self.state = "seek"
+            self.age = 0
+            world.press(here, 1)
 
         if self.state == "seek":
             if nav.offset[self.row][self.col] == (0, 0):
                 self.state = "charge"
+                world.press(here, -1)
                 return
             dc, dr = nav.arrow[self.row][self.col]
-            if not self._can_move(dc, dr, occupied, nav):
+            target = (self.col + dc, self.row + dr)
+            if world.free(target):
+                world.move(self, target)
                 return
-        else:
-            options = [
-                d for d in DIRECTIONS if self._can_move(d[0], d[1], occupied, nav)
-            ]
-            if not options:
-                return
-            weights = [
-                1 - (1 - MARK_FLOOR)
-                * trail.value(self.col + dc, self.row + dr, now) / MARK_VALUE
-                for dc, dr in options
-            ]
-            dc, dr = random.choices(options, weights)[0]
+            blocker = world.occ[target]
+            claim = self.priority(nav)
+            if blocker.pushable(nav, claim) and world.push(blocker, claim, here):
+                world.move(self, target)
+            return
 
-        col, row = self.col + dc, self.row + dr
-        occupied.remove((self.col, self.row))
-        occupied.add((col, row))
-        self.col, self.row = col, row
-        self.charge -= MOVE_COST
-        if self.state == "seek" and nav.offset[row][col] == (0, 0):
-            self.state = "charge"
+        options = [
+            (self.col + dc, self.row + dr)
+            for dc, dr in DIRECTIONS
+            if world.free((self.col + dc, self.row + dr))
+        ]
+        if world.pressure[self.row][self.col] >= PRESSURE_LIMIT:  # retreat
+            away = [t for t in options if nav.dist[t[1]][t[0]] > nav.dist[self.row][self.col]]
+            options = away or options
+        else:  # stay out of queue zones
+            options = [
+                t for t in options if world.pressure[t[1]][t[0]] < PRESSURE_LIMIT
+            ]
+        if options:
+            weights = [
+                1 - (1 - MARK_FLOOR) * trail.value(c, r, now) / MARK_VALUE
+                for c, r in options
+            ]
+            world.move(self, random.choices(options, weights)[0])
+        elif self.released:  # boxed in on a station: push someone aside
+            claim = self.priority(nav)
+            for dc, dr in random.sample(DIRECTIONS, 4):
+                t = (self.col + dc, self.row + dr)
+                b = world.occ.get(t)
+                if b and b.pushable(nav, claim) and world.push(b, claim, here):
+                    world.move(self, t)
+                    break
+
+
+class World:
+    """Occupancy plus the shared tile state agents coordinate through.
+
+    `pressure` is a per-tile count of seekers within PUSH_REACH tiles, i.e.
+    what an agent could read off the tiles around it. Nothing here lets an
+    agent query another agent directly.
+    """
+
+    def __init__(self, nav: NavMap, agents: list[Agent]) -> None:
+        self.nav = nav
+        self.occ: dict[Tile, Agent] = {(a.col, a.row): a for a in agents}
+        self.pressure = [[0] * GRID_SIZE for _ in range(GRID_SIZE)]
+
+    def free(self, tile: Tile) -> bool:
+        return (
+            0 <= tile[0] < GRID_SIZE and 0 <= tile[1] < GRID_SIZE
+            and tile not in self.occ
+        )
+
+    def is_station(self, tile: Tile) -> bool:
+        return self.nav.dist[tile[1]][tile[0]] == 0
+
+    def press(self, tile: Tile, delta: int) -> None:
+        r = PUSH_REACH
+        for dx in range(-r, r + 1):
+            span = r - abs(dx)
+            for dy in range(-span, span + 1):
+                c, row = tile[0] + dx, tile[1] + dy
+                if 0 <= c < GRID_SIZE and 0 <= row < GRID_SIZE:
+                    self.pressure[row][c] += delta
+
+    def move(self, agent: Agent, tile: Tile) -> None:
+        old = (agent.col, agent.row)
+        del self.occ[old]
+        self.occ[tile] = agent
+        agent.col, agent.row = tile
+        agent.charge -= MOVE_COST
+        agent.moved = True
+        if agent.released and not self.is_station(tile):
+            agent.released = False
+        if agent.state == "seek":
+            self.press(old, -1)
+            if self.is_station(tile):
+                agent.state = "charge"
+            else:
+                self.press(tile, 1)
+
+    def push(self, blocker: Agent, claim: tuple, claimant: Tile) -> bool:
+        """Shift `blocker` one tile out of the way, within PUSH_REACH tiles.
+
+        Searches through pushable agents for the nearest free (non-station)
+        tile; every agent on the path then steps forward one tile, like a
+        train, so the blocker's tile is freed. Nobody is pushed unless the
+        whole path works.
+        """
+        start = (blocker.col, blocker.row)
+        queue = deque([[start]])
+        seen = {start, claimant}
+        while queue:
+            path = queue.popleft()
+            if len(path) > PUSH_REACH:
+                continue
+            u = path[-1]
+            for dc, dr in random.sample(DIRECTIONS, 4):
+                v = (u[0] + dc, u[1] + dr)
+                if v in seen or not (0 <= v[0] < GRID_SIZE and 0 <= v[1] < GRID_SIZE):
+                    continue
+                seen.add(v)
+                if v not in self.occ:
+                    if self.is_station(v):
+                        continue
+                    chain = [self.occ[p] for p in path]
+                    if all(y.pushable(self.nav, claim) for y in chain):
+                        for y, t in reversed(list(zip(chain, [*path[1:], v]))):
+                            self.move(y, t)
+                        return True
+                    continue
+                if self.occ[v].pushable(self.nav, claim):
+                    queue.append([*path, v])
+        return False
+
+    def tick(self, agents: list[Agent], trail: Trail, now: float) -> None:
+        """One step for everyone, highest priority first."""
+        for agent in agents:
+            agent.moved = False
+        for agent in sorted(agents, key=lambda a: a.priority(self.nav), reverse=True):
+            agent.step(self, trail, now)
+        for agent in agents:
+            if agent.state == "seek":
+                agent.age += 1
 
 
 def draw_agents(
@@ -180,15 +317,13 @@ def draw_agents(
 class NavMap:
     offset: list[list[Tile]]  # (dx, dy) to the target station
     arrow: list[list[Tile]]  # cardinal unit step an agent should take
-    blocked: set[tuple[Tile, Tile]]  # forbidden (from_tile, to_tile) moves
-    lanes: set[Tile]  # exit-only wall tiles beside stations
+    dist: list[list[int]]  # moves to the nearest station
 
 
 def make_stations() -> list[Tile]:
     """STATION_COUNT charging points, equally spaced along the walls.
 
-    Offset by half a spacing so none lands on a corner (a corner tile has
-    no inward neighbour to enter from).
+    Offset by half a spacing so none lands on a corner.
     """
     last = GRID_SIZE - 1
     ring = (
@@ -206,36 +341,8 @@ def make_stations() -> list[Tile]:
     return stations
 
 
-def inward(station: Tile) -> Tile:
-    """Direction from a wall station into the room."""
-    x, y = station
-    if y == 0:
-        return 0, 1
-    if y == GRID_SIZE - 1:
-        return 0, -1
-    return (1, 0) if x == 0 else (-1, 0)
-
-
 def build_nav(stations: list[Tile]) -> NavMap:
-    """Entry only from the room side; the two wall tiles beside a station
-    are exit-only lanes (nobody may step onto them except from the station,
-    and nobody may step from them onto the station). Arrows follow shortest
-    paths that respect those rules.
-    """
-    blocked: set[tuple[Tile, Tile]] = set()
-    lanes: set[Tile] = set()
-    for sx, sy in stations:
-        nx, ny = inward((sx, sy))
-        wx, wy = abs(ny), abs(nx)  # along the wall
-        for lane in ((sx + wx, sy + wy), (sx - wx, sy - wy)):
-            lanes.add(lane)
-            blocked.add((lane, (sx, sy)))
-            for dc, dr in DIRECTIONS:
-                v = (lane[0] + dc, lane[1] + dr)
-                if v != (sx, sy):
-                    blocked.add((v, lane))
-
-    # Multi-source BFS backwards over allowed moves: shortest legal path.
+    """Shortest-path arrows to the nearest station (multi-source BFS)."""
     dist: dict[Tile, int] = {s: 0 for s in stations}
     src: dict[Tile, Tile] = {s: s for s in stations}
     queue = deque(stations)
@@ -243,9 +350,7 @@ def build_nav(stations: list[Tile]) -> NavMap:
         u = queue.popleft()
         for dc, dr in DIRECTIONS:
             v = (u[0] + dc, u[1] + dr)
-            if not (0 <= v[0] < GRID_SIZE and 0 <= v[1] < GRID_SIZE):
-                continue
-            if v in dist or (v, u) in blocked:
+            if not (0 <= v[0] < GRID_SIZE and 0 <= v[1] < GRID_SIZE) or v in dist:
                 continue
             dist[v] = dist[u] + 1
             src[v] = src[u]
@@ -253,22 +358,22 @@ def build_nav(stations: list[Tile]) -> NavMap:
 
     offset = [[(0, 0)] * GRID_SIZE for _ in range(GRID_SIZE)]
     arrow = [[(0, 0)] * GRID_SIZE for _ in range(GRID_SIZE)]
+    grid_dist = [[0] * GRID_SIZE for _ in range(GRID_SIZE)]
     for (col, row), d in dist.items():
         sx, sy = src[(col, row)]
         offset[row][col] = (sx - col, sy - row)
+        grid_dist[row][col] = d
         if d == 0:
             continue
-        # Legal steps that are one closer to the same station.
         steps = [
             (dc, dr)
             for dc, dr in DIRECTIONS
             if dist.get((col + dc, row + dr)) == d - 1
             and src[(col + dc, row + dr)] == (sx, sy)
-            and ((col, row), (col + dc, row + dr)) not in blocked
         ]
         want = cardinal(sx - col, sy - row)
         arrow[row][col] = want if want in steps else steps[0]
-    return NavMap(offset, arrow, blocked, lanes)
+    return NavMap(offset, arrow, grid_dist)
 
 
 def draw_arrow(screen: pygame.Surface, cx: int, cy: int, dx: int, dy: int) -> None:
@@ -319,8 +424,6 @@ def draw_grid(
             value = trail.value(col, row, now)
             if is_station:
                 fill = STATION_COLOR
-            elif (col, row) in nav.lanes:
-                fill = LANE_COLOR
             else:  # white, tinted toward MARK_TINT by the tile's value
                 k = value / MARK_VALUE
                 fill = tuple(round(255 + (t - 255) * k) for t in MARK_TINT)
@@ -380,7 +483,6 @@ def main() -> None:
     # Unique random start tiles: one agent per tile.
     starts = random.sample(range(GRID_SIZE * GRID_SIZE), AGENT_COUNT)
     agents = [Agent(i, t % GRID_SIZE, t // GRID_SIZE) for i, t in enumerate(starts)]
-    occupied = {(a.col, a.row) for a in agents}
     labels = [font.render(f"#{i:03d}", True, WHITE) for i in range(AGENT_COUNT)]
     charge_labels = [font.render(f"{c}U", True, WHITE) for c in range(MAX_CHARGE + 1)]
     step_timer = 0.0
@@ -394,6 +496,8 @@ def main() -> None:
     stations = make_stations()
     station_set = set(stations)
     nav = build_nav(stations)
+    world = World(nav, agents)
+    world = World(nav, agents)
     tile_font = pygame.font.Font(None, 15)
     text_cache: dict[tuple[int, int], pygame.Surface] = {}
 
@@ -411,10 +515,7 @@ def main() -> None:
         step_timer += dt
         while step_timer >= STEP_INTERVAL:
             step_timer -= STEP_INTERVAL
-            random.shuffle(agents)  # no agent gets move priority
-            for agent in agents:
-                agent.step(occupied, nav, trail, now)
-            agents.sort(key=lambda a: a.id)
+            world.tick(agents, trail, now)
         for agent in agents:
             trail.mark(agent.col, agent.row, now)
 
