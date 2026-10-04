@@ -24,7 +24,7 @@ CHARGE_RATE = 10000  # U/s while on a station
 LOW_CHARGE = MAX_CHARGE * 0.25  # below this the agent heads for a station
 MARK_VALUE = 100  # value an agent writes to the tile it stands on
 MARK_DECAY = 0.9  # per-second multiplier on written values
-MARK_FLOOR = 0.1  # relative walk weight of a tile at full value (lowest bias)
+WALK_NOISE = 0.5  # random jitter (in value units) breaking near-ties
 MARK_TINT = (255, 200, 120)  # tile tint at full value
 PUSH_REACH = 5  # sensing radius in tiles
 PUSH_FLOOR_SEEK = 40  # a seeker needs this much slack (moves) to be pushed
@@ -79,6 +79,31 @@ class Trail:
     def value(self, col: int, row: int, now: float) -> float:
         t = self.stamp[row][col]
         return 0.0 if t is None else MARK_VALUE * MARK_DECAY ** (now - t)
+
+    def cone_mean(
+        self, col: int, row: int, cone: list[Tile], now: float
+    ) -> float:
+        """Mean value over the in-grid tiles of a sensing cone."""
+        total = n = 0
+        for dx, dy in cone:
+            c, r = col + dx, row + dy
+            if 0 <= c < GRID_SIZE and 0 <= r < GRID_SIZE:
+                total += self.value(c, r, now)
+                n += 1
+        return total / n if n else 0.0
+
+
+def _cone(dc: int, dr: int) -> list[Tile]:
+    """Tiles within PUSH_REACH ahead of an agent facing (dc, dr)."""
+    cells = []
+    for k in range(1, PUSH_REACH + 1):
+        for j in range(-(k - 1), k):
+            if k + abs(j) <= PUSH_REACH:
+                cells.append((dc * k + dr * j, dr * k + dc * j))
+    return cells
+
+
+CONES = {d: _cone(*d) for d in DIRECTIONS}
 
 
 class Agent:
@@ -137,8 +162,9 @@ class Agent:
     def step(self, world: World, trail: Trail, now: float) -> None:
         """One tile move per step; a completed move costs MOVE_COST charge.
 
-        Walking is a random cardinal walk over the free neighbours, weighted
-        toward tiles with a lower trail value and kept out of queue zones.
+        Walking steps to the free neighbour whose sensing cone (tiles within
+        PUSH_REACH ahead) has the lowest mean trail value, and stays out of
+        queue zones.
         Below LOW_CHARGE the agent seeks: it follows the arrow on its tile to
         the nearest station. If a lower-priority agent is in the way, that
         agent is pushed aside (see World.push); otherwise the seeker waits.
@@ -181,11 +207,13 @@ class Agent:
                 t for t in options if world.pressure[t[1]][t[0]] < PRESSURE_LIMIT
             ]
         if options:
-            weights = [
-                1 - (1 - MARK_FLOOR) * trail.value(c, r, now) / MARK_VALUE
-                for c, r in options
-            ]
-            world.move(self, random.choices(options, weights)[0])
+            # Head where the trail is coldest within sensing range.
+            def heat(t: Tile) -> float:
+                cone = CONES[(t[0] - self.col, t[1] - self.row)]
+                mean = trail.cone_mean(self.col, self.row, cone, now)
+                return mean + random.random() * WALK_NOISE
+
+            world.move(self, min(options, key=heat))
         elif self.released:  # boxed in on a station: push someone aside
             claim = self.priority(nav)
             for dc, dr in random.sample(DIRECTIONS, 4):
