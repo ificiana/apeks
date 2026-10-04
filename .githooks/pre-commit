@@ -1,0 +1,6 @@
+#!/bin/sh
+# Lint, format check and 100% line/branch coverage gate.
+set -e
+uv run ruff check .
+uv run ruff format --check .
+uv run pytest -q

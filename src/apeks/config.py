@@ -1,0 +1,39 @@
+GRID_SIZE = 100  # tiles per side
+TILE_SIZE = 50  # px per tile
+WORLD_SIZE = GRID_SIZE * TILE_SIZE
+CAM_SPEED = 1000  # px/s
+
+WHITE = (255, 255, 255)
+BLACK = (0, 0, 0)
+AGENT_COUNT = 100
+SPEED = 8.0  # tiles/s, constant
+MASS = 1.0  # kg
+STEP_INTERVAL = 1 / SPEED  # s per one-tile move
+MOVE_COST = round(MASS * SPEED**2)  # U per tile (m*v^2)
+MAX_CHARGE = 100000  # U
+DIRECTIONS = ((1, 0), (-1, 0), (0, 1), (0, -1))
+AGENT_COLOR = (220, 60, 60)
+CHARGE_RATE = 10000  # U/s while on a station
+LOW_CHARGE = MAX_CHARGE * 0.25  # below this the agent heads for a station
+MARK_VALUE = 100  # value an agent writes to the tile it stands on
+MARK_DECAY = 0.9  # per-second multiplier on written values
+WALK_NOISE = 0.5  # random jitter (in value units) breaking near-ties
+MARK_TINT = (255, 200, 120)  # tile tint at full value
+PUSH_REACH = 5  # sensing radius in tiles
+PUSH_FLOOR_SEEK = 40  # a seeker needs this much slack (moves) to be pushed
+PUSH_FLOOR_WALK = 3
+URGENT_SLACK = 20  # seekers below this slack jump the queue
+PRESSURE_LIMIT = 4  # walkers avoid tiles with this many seekers in reach
+SEEK_RING = (255, 200, 0)
+CHARGE_RING = (60, 220, 90)
+
+STATION_COUNT = 20
+STATION_COLOR = (190, 235, 200)
+STATION_DOT = (120, 255, 160)
+ARROW_COLOR = (30, 80, 160)
+TEXT_COLOR = (40, 40, 40)
+VALUE_COLOR = (170, 90, 20)
+
+BP_BG = (20, 60, 120)  # blueprint blue
+BP_LINE = (200, 225, 255)  # pale chalk-blue lines
+MINIMAP_SIZE = 100  # px
