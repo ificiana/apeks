@@ -790,7 +790,6 @@ class World:
                     self.waiting[port],
                     target,
                     detours(times, to_target, target),
-                    config.DETOUR_FRACTION * times[target],
                 )
             )
         plans = [

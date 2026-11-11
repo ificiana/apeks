@@ -523,7 +523,7 @@ def via_net() -> SeaNetwork:
     return net
 
 
-def test_regroup_loads_packages_for_ports_on_the_way_only() -> None:
+def test_regroup_fills_the_hold_with_off_route_ports_last() -> None:
     pkgs = [
         Package("P#0", "P", "Q", 0.0),
         Package("P#1", "P", "Q", 0.0),
@@ -534,8 +534,8 @@ def test_regroup_loads_packages_for_ports_on_the_way_only() -> None:
     world.vessels["a.0"].docked_since = -config.MAX_WAIT
     world.step()
     (convoy,) = world.convoys.values()
-    assert sorted(p.id for p in world.vessels["a.0"].cargo) == ["P#0", "P#1", "P#3"]
-    assert [p.id for p in world.waiting["P"]] == ["P#2"]
+    assert [p.id for p in world.vessels["a.0"].cargo] == ["P#0", "P#1", "P#3", "P#2"]
+    assert world.waiting["P"] == []
     assert convoy.destination == "Q"
 
 

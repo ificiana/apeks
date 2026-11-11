@@ -58,18 +58,22 @@ def test_detours_measure_extra_time_via_each_port() -> None:
     assert detours(cut_off, to_b, "B") == {"A": math.inf, "B": 0.0, "C": math.inf}
 
 
-def test_load_takes_target_then_cheapest_detours_within_cap() -> None:
+def test_load_fills_target_then_cheapest_detours_with_no_cut_off() -> None:
     waiting = [pkg("D", 0), pkg("C", 0), pkg("B", 0), pkg("D", 1), pkg("E", 0)]
     det = {"B": 0.0, "C": 1.0, "D": 1.0, "E": 50.0}
     cargo = [pkg("B", 9)]
-    got = load(cargo, 4, waiting, "B", det, 5.0)
+    got = load(cargo, 4, waiting, "B", det)
     assert [p.destination for p in got] == ["B", "D", "D"]
     assert [p.id for p in waiting] == ["A#C0", "A#E0"]
     roomy: list[Package] = []
-    assert [p.destination for p in load(roomy, 9, waiting, "B", det, 5.0)] == ["C"]
-    assert [p.id for p in waiting] == ["A#E0"]
-    assert load([pkg("B", i) for i in range(2)], 2, [pkg("B")], "B", det, 5.0) == []
-    assert load([], 2, [pkg("Z")], "B", det, 5.0) == []
+    got = load(roomy, 9, waiting, "B", det)
+    assert [p.destination for p in got] == ["C", "E"]  # a long detour still fills
+    assert waiting == []
+    assert load([pkg("B", i) for i in range(2)], 2, [pkg("B")], "B", det) == []
+    assert load([], 2, [pkg("Z")], "B", det) == []  # no detour known
+    stranded = [pkg("Y")]
+    assert load([], 2, stranded, "B", {"B": 0.0, "Y": math.inf}) == []
+    assert stranded == [pkg("Y")]  # unreachable ports are never loaded
 
 
 def test_next_port_from_cargo_or_known_backlog() -> None:

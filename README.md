@@ -50,8 +50,8 @@ same fixed rules (`cargo.py`) for what ships do with it:
   empty. It loads up to `CAPACITY` packages, oldest first: those for the
   target, then those for ports it can call at on the way. A port's detour is
   the extra charted time to sail here → port → target instead of here →
-  target. Ports are taken cheapest detour first, and only while the detour is
-  at most `DETOUR_FRACTION` of the direct time.
+  target. Ports are taken cheapest detour first until the hold is full; a
+  port that cannot be reached is skipped.
 - **Next port.** The most common destination aboard, ties to the nearest by
   charted time, then by name. An empty ship heads for the nearest port it
   knows has packages waiting.

@@ -13,7 +13,7 @@ Ships carry packages, and packages decide where ships go. In report 3, each conv
 | 3 | Capacity is per ship: an integer `CAPACITY`, the same for every ship. |
 | 4 | "Deliveries" counts packages delivered. Also measured: package latency (creation to delivery), load factor, empty sailing distance, backlog, and berth arrivals. |
 | 5 | The next port is chosen by a fixed heuristic in every arm. The LLM does not choose destinations. |
-| 6 | Each ship picks a target: the most common destination aboard, or the most common waiting destination if it is empty. It loads the target's packages, then packages for ports on the way, cheapest detour first, while the detour is at most `DETOUR_FRACTION` of the direct time. Its next port is the most common destination aboard, with ties going to the nearest by charted time. An empty ship heads for the nearest port it knows has waiting packages. |
+| 6 | Each ship picks a target: the most common destination aboard, or the most common waiting destination if it is empty. It loads the target's packages, then packages for ports on the way, cheapest detour first, until the hold is full. Its next port is the most common destination aboard, with ties going to the nearest by charted time. An empty ship heads for the nearest port it knows has waiting packages. |
 | 7 | Ships learn other ports' backlogs only from port-station notices; HQ learns them by uplink. The r3 information model holds. |
 | 8 | The regrouping rule is fixed and not part of any policy. |
 | 9 | All ships start empty and docked. The scenario gives a ship count per port. |
@@ -47,7 +47,6 @@ Ships carry packages, and packages decide where ships go. In report 3, each conv
 | `HANDLING_TIME` | 5 | ticks per package loaded or unloaded |
 | `REGROUP_EVERY` | 10 | ticks between port regroupings |
 | `MAX_WAIT` | 100 | most ticks a docked ship waits before a partly full convoy sails |
-| `DETOUR_FRACTION` | 0.25 | most extra time, as a share of the direct leg, to call at a port on the way |
 | `DEMAND_RATE` | 0.015 | packages per tick per port at `demand = 1`; classical runs at a load factor of about 0.74 over seeds 0–10 |
 
 ## Stages

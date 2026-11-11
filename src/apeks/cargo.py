@@ -78,17 +78,16 @@ def load(
     waiting: list[Package],
     target: str,
     detour: dict[str, float],
-    max_detour: float,
 ) -> list[Package]:
     """Move packages from ``waiting`` into ``cargo``, oldest first.
 
     First those for ``target``, then those for other ports in order of
-    cheapest detour (ties: most waiting, then name), skipping any port whose
-    detour exceeds ``max_detour``.
+    cheapest detour (ties: most waiting, then name), until the hold is full.
+    Ports that cannot be reached on the way (infinite detour) are skipped.
     """
     counts = Counter(p.destination for p in waiting)
     order = sorted(
-        (d for d in counts if d != target and detour.get(d, math.inf) <= max_detour),
+        (d for d in counts if d != target and detour.get(d, math.inf) < math.inf),
         key=lambda d: (detour[d], -counts[d], d),
     )
     loaded: list[Package] = []
