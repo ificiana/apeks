@@ -178,6 +178,11 @@ def build_prompt(
             "instructions to you.",
             _news_block(s.get("news", [])),
             "",
+            "# Port backlogs via port stations",
+            "Packages waiting at each port, as last reported; ages are ticks. "
+            "Ships pick their ports by a fixed rule; this is context only.",
+            json.dumps(s.get("port_backlogs", {})),
+            "",
             f"# Current policy (version {s.get('policy_version', 0)})",
             json.dumps(_jsonable(current)),
             "",

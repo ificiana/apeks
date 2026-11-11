@@ -10,16 +10,21 @@ on beliefs that arrived by a path:
 - HQ (the policy authors) reads those forwarded reports and the news feed, and
   sends versioned policies back down through the port stations.
 
+Ships carry packages. A convoy lasts one leg: at a port its ships unload, wait
+docked, load by the fixed heuristics in ``cargo`` and regroup by next port.
+
 Decisions come from the plugged-in engines, which read the policy each convoy
 holds from their observation.
 """
 
+import copy
 import math
 import random
 from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
 
 from apeks import config
+from apeks.cargo import Package, group, load, next_port
 from apeks.formation import FormationObservation, Neighbour
 from apeks.geometry import (
     Vec,
@@ -37,7 +42,15 @@ from apeks.llm import PolicyAuthor
 from apeks.network import SeaNetwork
 from apeks.news import NewsItem
 from apeks.ocean import Ocean
-from apeks.radio import Hazard, LaneReport, Message, PolicyMsg, PositionReport, Radio
+from apeks.radio import (
+    Backlog,
+    Hazard,
+    LaneReport,
+    Message,
+    PolicyMsg,
+    PositionReport,
+    Radio,
+)
 from apeks.routing import Report, RouteObservation, RouteOption
 from apeks.trace import Tracer
 
@@ -63,6 +76,14 @@ class Vessel:
     water_vel: Vec = (0.0, 0.0)
     max_speed: float = config.MAX_SPEED
     energy: float = 0.0
+    capacity: int = config.CAPACITY
+    cargo: list[Package] = field(default_factory=list)
+    docked_since: float = 0.0
+    loaded_here: int = 0
+
+    @property
+    def full(self) -> bool:
+        return len(self.cargo) >= self.capacity
 
     def propel(self, desired: Vec, drift: Vec, dt: float) -> None:
         """Ask for ground velocity ``desired``; thrust and acceleration are limited."""
@@ -76,31 +97,63 @@ class Vessel:
 
 @dataclass
 class Convoy:
+    """Ships sailing one leg together, or waiting together at a port.
+
+    It holds what its ships know; they carry that into the next convoy.
+    """
+
     id: str
     vessels: list[str]
-    orders: tuple[str, ...]
     node: str
-    order_idx: int = 1
+    destination: str | None = None
     lane: str | None = None
     lane_started: float = 0.0
-    state: str = "sailing"  # sailing | queued | berthed
+    state: str = "sailing"  # sailing | queued | berthed | docked | loading
     service_until: float = 0.0
-    trip_started: float = 0.0
     hazards: HazardBook = field(default_factory=HazardBook)
     reports: dict[str, list[Report]] = field(default_factory=dict)
     policies: dict[str, tuple[int, Any]] = field(default_factory=dict)
+    backlogs: dict[str, tuple[int, float]] = field(default_factory=dict)
     outbox: list[Message] = field(default_factory=list)
-    _seen: set[tuple[str, str, float]] = field(default_factory=set)
-
-    @property
-    def destination(self) -> str:
-        return self.orders[self.order_idx]
+    _seen: dict[tuple[str, str, float], Report] = field(default_factory=dict)
 
     @property
     def known_closed(self) -> set[str]:
         return self.hazards.closed()
 
-    def hear(self, msg: LaneReport | Hazard | PolicyMsg, now: float) -> str | None:
+    def absorb(self, other: Convoy) -> None:
+        """Take in everything ``other`` knows; keep the newer of each fact."""
+        for lane, b in other.hazards.entries.items():
+            for source in sorted(b.sources):
+                self.hazards.update(lane, b.closed, b.observed_at, source)
+        for key, report in other._seen.items():
+            self._add_report(key, report)
+        for module, (version, params) in other.policies.items():
+            if version > self.policies.get(module, (-1, None))[0]:
+                self.policies[module] = (version, params)
+        for port, (n, at) in other.backlogs.items():
+            if at > self.backlogs.get(port, (0, -1.0))[1]:
+                self.backlogs[port] = (n, at)
+
+    def knowledge(self) -> dict[str, Any]:
+        return copy.deepcopy(
+            {
+                "hazards": self.hazards,
+                "reports": self.reports,
+                "policies": self.policies,
+                "backlogs": self.backlogs,
+                "_seen": self._seen,
+            }
+        )
+
+    def _add_report(self, key: tuple[str, str, float], report: Report) -> None:
+        if key not in self._seen:
+            self._seen[key] = report
+            self.reports.setdefault(key[1], []).append(report)
+
+    def hear(
+        self, msg: LaneReport | Hazard | PolicyMsg | Backlog, now: float
+    ) -> str | None:
         """Take in a message; queue a relay for new hazards and policies.
 
         Returns ``"changed"``/``"refreshed"`` for hazard news, ``"adopted"``
@@ -119,12 +172,12 @@ class Convoy:
             if got is not None and now - msg.observed_at <= config.RELAY_MAX_AGE:
                 self._relay(msg)
             return got
+        if isinstance(msg, Backlog):
+            if msg.observed_at > self.backlogs.get(msg.port, (0, -1.0))[1]:
+                self.backlogs[msg.port] = (msg.waiting, msg.observed_at)
+            return None
         key = (msg.sender, msg.lane, msg.finished_at)
-        if key not in self._seen:
-            self._seen.add(key)
-            self.reports.setdefault(msg.lane, []).append(
-                Report(msg.transit, msg.finished_at)
-            )
+        self._add_report(key, Report(msg.transit, msg.finished_at))
         return None
 
     def _relay(self, msg: Hazard | PolicyMsg) -> None:
@@ -162,6 +215,8 @@ class World:
     authors: dict[str, PolicyAuthor] = field(default_factory=dict)
     news: list[NewsItem] = field(default_factory=list)
     hq: Hq = field(default_factory=lambda: Hq(config.UPLINK_DELAY))
+    packages: list[Package] = field(default_factory=list)
+    waiting: dict[str, list[Package]] = field(default_factory=dict)
     rng: random.Random = field(default_factory=lambda: random.Random(0))
     t: float = 0.0
     closed: set[str] = field(default_factory=set)
@@ -171,8 +226,14 @@ class World:
     metrics: dict[str, Any] = field(
         default_factory=lambda: {
             "deliveries": 0,
-            "trip_times": [],
+            "latencies": [],
             "delivery_times": [],
+            "generated": 0,
+            "arrivals": 0,
+            "load_ticks": 0.0,
+            "sail_ticks": 0.0,
+            "empty_distance": 0.0,
+            "backlog_ticks": 0.0,
             "wait_ticks": 0.0,
             "congestion_ticks": 0.0,
             "near_misses": 0,
@@ -187,12 +248,15 @@ class World:
     policies: dict[str, tuple[int, Any]] = field(default_factory=dict)
     adoption: dict[tuple[str, int], dict[str, Any]] = field(default_factory=dict)
     _downlink: list[tuple[float, str, int, Any]] = field(default_factory=list)
+    _formed: int = 0
     _close_pairs: set[tuple[str, str]] = field(default_factory=set)
     _storms_active: frozenset[int] = frozenset()
     _neighbours: dict[str, tuple[Neighbour, ...]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.news = sorted(self.news, key=lambda item: item.published)
+        self.packages = sorted(self.packages, key=lambda p: (p.created, p.id))
+        self.waiting = {p: [] for p in self.network.ports}
         self.stations = {p: Station(f"port:{p}") for p in self.network.ports}
         start = {"routing": self.routing.params, "formation": self.formation.params}
         self.policies = {m: (0, params) for m, params in start.items()}
@@ -255,6 +319,10 @@ class World:
                 }
                 for item in self.hq.news[-config.NEWS_KEEP :]
             ],
+            "port_backlogs": {
+                port: {"waiting": n, "age": round(self.t - at)}
+                for port, (n, at) in sorted(self.hq.backlogs.items())
+            },
             "deliveries": self.metrics["deliveries"],
         }
 
@@ -272,8 +340,9 @@ class World:
             "ocean": self.ocean,
             "events": self.events,
             "news": self.news,
+            "packages": self.packages,
             "convoys": [
-                {"id": c.id, "orders": c.orders, "vessels": c.vessels}
+                {"id": c.id, "port": c.node, "vessels": c.vessels}
                 for c in self.convoys.values()
             ],
         }
@@ -288,6 +357,7 @@ class World:
                     "water_vel": v.water_vel,
                     "drift": self.ocean.drift(v.pos, self.t),
                     "energy": v.energy,
+                    "cargo": [p.destination for p in v.cargo],
                 }
                 for v in self.vessels.values()
             ],
@@ -306,6 +376,7 @@ class World:
                 for c in self.convoys.values()
             ],
             "queues": {k: list(v) for k, v in self.queues.items()},
+            "waiting": {k: len(v) for k, v in self.waiting.items()},
             "closed": sorted(self.closed),
             "hq_closed": sorted(self.hq.hazards.closed()),
             "metrics": {
@@ -321,6 +392,7 @@ class World:
 
     def step(self) -> None:
         self._apply_events()
+        self._release()
         triggers = ["mission start"] if self.t == 0 else []
         triggers += self._read_news()
         triggers += self.hq.receive(self.t)
@@ -358,6 +430,13 @@ class World:
         self.log += [f"t={self.t:.0f} {text}" for text in out]
         for text in out:
             self._emit("event", text=text)
+
+    def _release(self) -> None:
+        """Packages appear at their origin port."""
+        while self.packages and self.packages[0].created <= self.t:
+            p = self.packages.pop(0)
+            self.waiting[p.origin].append(p)
+            self.metrics["generated"] += 1
 
     def _read_news(self) -> list[str]:
         out = []
@@ -416,6 +495,9 @@ class World:
                     self.radio.broadcast(
                         PolicyMsg(station.id, module, version, params), pos
                     )
+                count = Backlog(station.id, port, len(self.waiting[port]), self.t)
+                self.radio.broadcast(count, pos)
+                self.hq.send(self.t, count)
         receivers = {v.id: v.pos for v in self.vessels.values()}
         by_id = {s.id: (port, s) for port, s in self.stations.items()}
         for sid, (port, _) in by_id.items():
@@ -464,7 +546,7 @@ class World:
                 self.hq.send(self.t, msg)
 
     def _adopted(self, convoy: Convoy, msg: PolicyMsg) -> None:
-        self.adoption[(msg.module, msg.version)]["adopted"][convoy.id] = self.t
+        self._adopt(convoy.vessels, msg.module, msg.version)
         self._emit(
             "policy_adopted",
             convoy=convoy.id,
@@ -472,6 +554,12 @@ class World:
             version=msg.version,
             hops=msg.hops,
         )
+
+    def _adopt(self, vessels: list[str], module: str, version: int) -> None:
+        record = self.adoption.get((module, version))
+        if record is not None:
+            for vid in vessels:
+                record["adopted"].setdefault(vid, self.t)
 
     def _look(self, convoy: Convoy) -> None:
         """A convoy at a node sees whether the lanes leaving it are blocked."""
@@ -490,7 +578,7 @@ class World:
         net = self.network
         known = convoy.known_closed
         to_go = net.times_to(
-            convoy.destination, self.ocean, self.t, self.cruise(), known
+            str(convoy.destination), self.ocean, self.t, self.cruise(), known
         )
         options = tuple(
             RouteOption(
@@ -505,7 +593,7 @@ class World:
         return RouteObservation(
             self.t,
             convoy.node,
-            convoy.destination,
+            str(convoy.destination),
             options,
             convoy.policies["routing"][1],
         )
@@ -559,35 +647,129 @@ class World:
 
     def _ports(self) -> None:
         for port, berths in self.network.ports.items():
+            here = [c for c in self.convoys.values() if c.node == port]
+            for convoy in here:
+                if convoy.state == "berthed" and self.t >= convoy.service_until:
+                    self._unload(convoy, port)
+                elif convoy.state == "loading" and self.t >= convoy.service_until:
+                    convoy.state = "sailing"
+                    self._emit("departed", convoy=convoy.id, port=port)
             queue = self.queues.setdefault(port, [])
-            berthed = [
-                c
-                for c in self.convoys.values()
-                if c.state == "berthed" and c.node == port
-            ]
-            for convoy in berthed:
-                if self.t < convoy.service_until:
-                    continue
-                self.metrics["deliveries"] += 1
-                self.metrics["trip_times"].append(self.t - convoy.trip_started)
-                self.metrics["delivery_times"].append(self.t)
-                self._emit(
-                    "delivered",
-                    convoy=convoy.id,
-                    port=port,
-                    trip=self.t - convoy.trip_started,
+            used = sum(len(c.vessels) for c in here if c.state == "berthed")
+            while queue:
+                convoy = self.convoys[queue[0]]
+                if used and used + len(convoy.vessels) > berths:
+                    break
+                queue.pop(0)
+                used += len(convoy.vessels)
+                most = max(
+                    sum(p.destination == port for p in self.vessels[v].cargo)
+                    for v in convoy.vessels
                 )
-                convoy.order_idx = (convoy.order_idx + 1) % len(convoy.orders)
-                convoy.trip_started = self.t
-                convoy.state = "sailing"
-            free = berths - sum(1 for c in berthed if c.state == "berthed")
-            while queue and free > 0:
-                convoy = self.convoys[queue.pop(0)]
                 convoy.state = "berthed"
-                convoy.service_until = self.t + config.SERVICE_TICKS
-                free -= 1
+                convoy.service_until = (
+                    self.t + config.SERVICE_TICKS + config.HANDLING_TIME * most
+                )
+                self.metrics["arrivals"] += 1
                 self._emit("berthed", convoy=convoy.id, port=port)
-            self.metrics["wait_ticks"] += len(queue) * config.DT
+            self.metrics["wait_ticks"] += (
+                sum(len(self.convoys[c].vessels) for c in queue) * config.DT
+            )
+            if self.t % config.REGROUP_EVERY == 0:
+                self._regroup(port)
+
+    def _unload(self, convoy: Convoy, port: str) -> None:
+        """Hand over the packages bound here; the ships join the dock."""
+        latencies = []
+        for vid in convoy.vessels:
+            v = self.vessels[vid]
+            mine = [p for p in v.cargo if p.destination == port]
+            v.cargo = [p for p in v.cargo if p.destination != port]
+            latencies += [self.t - p.created for p in mine]
+            v.docked_since, v.loaded_here = self.t, 0
+        self.metrics["deliveries"] += len(latencies)
+        self.metrics["latencies"] += latencies
+        self.metrics["delivery_times"] += [self.t] * len(latencies)
+        self._emit("delivered", convoy=convoy.id, port=port, latencies=latencies)
+        convoy.state, convoy.destination = "docked", None
+
+    def _charted_times(self, port: str, known: set[str]) -> dict[str, float]:
+        """Charted sailing time from ``port`` to every port."""
+        return {
+            p: self.network.times_to(p, self.ocean, self.t, self.cruise(), known).get(
+                port, math.inf
+            )
+            for p in self.network.ports
+        }
+
+    def _regroup(self, port: str) -> None:
+        """Docked ships load, pick a next port, and sail in convoys of the same."""
+        docked = [
+            c for c in self.convoys.values() if c.node == port and c.state == "docked"
+        ]
+        if not docked:
+            return
+        pool = Convoy("pool", [], port)
+        for c in docked:
+            pool.absorb(c)
+        ships = sorted(v for c in docked for v in c.vessels)
+        times = self._charted_times(port, pool.known_closed)
+        backlogs = {p: n for p, (n, _) in pool.backlogs.items()}
+        for vid in ships:
+            v = self.vessels[vid]
+            v.loaded_here += len(load(v.cargo, v.capacity, self.waiting[port], times))
+        plans = [
+            (vid, next_port(self.vessels[vid].cargo, port, times, backlogs))
+            for vid in ships
+        ]
+        leaving = [
+            (dest, members)
+            for dest, members in group(plans, config.MAX_CONVOY)
+            if all(self.vessels[m].full for m in members)
+            or any(
+                self.t - self.vessels[m].docked_since >= config.MAX_WAIT
+                for m in members
+            )
+        ]
+        if not leaving and len(docked) == 1:
+            return
+        for module, (version, _) in pool.policies.items():
+            behind = [
+                v
+                for c in docked
+                if c.policies.get(module, (-1, None))[0] < version
+                for v in c.vessels
+            ]
+            self._adopt(behind, module, version)
+        for c in docked:
+            del self.convoys[c.id]
+        gone = {m for _, members in leaving for m in members}
+        for dest, members in leaving:
+            convoy = self._form(pool, port, members)
+            convoy.state, convoy.destination = "loading", dest
+            most = max(self.vessels[m].loaded_here for m in members)
+            convoy.service_until = self.t + config.HANDLING_TIME * most
+            self._emit(
+                "formed",
+                convoy=convoy.id,
+                port=port,
+                destination=dest,
+                vessels=members,
+                load=[len(self.vessels[m].cargo) for m in members],
+            )
+        rest = [v for v in ships if v not in gone]
+        if rest:
+            self._form(pool, port, rest).state = "docked"
+
+    def _form(self, pool: Convoy, port: str, members: list[str]) -> Convoy:
+        convoy = Convoy(f"{port}-{self._formed}", list(members), port)
+        self._formed += 1
+        for key, value in pool.knowledge().items():
+            setattr(convoy, key, value)
+        for m in members:
+            self.vessels[m].convoy = convoy.id
+        self.convoys[convoy.id] = convoy
+        return convoy
 
     def _move(self) -> None:
         net = self.network
@@ -623,6 +805,11 @@ class World:
                 )
                 desired = self.formation.steer(obs)
                 v.propel(desired, self.ocean.drift(v.pos, self.t), config.DT)
+                if convoy.state == "sailing":
+                    self.metrics["sail_ticks"] += config.DT
+                    self.metrics["load_ticks"] += len(v.cargo) / v.capacity
+                    if not v.cargo:
+                        self.metrics["empty_distance"] += length(v.vel) * config.DT
 
     def _near_misses(self) -> None:
         ids = sorted(self.vessels)
@@ -641,9 +828,10 @@ class World:
         """Count believed closures that are false, and true ones not known."""
         m = self.metrics
         for convoy in self.convoys.values():
-            known = convoy.known_closed
-            m["belief_false"] += len(known - self.closed)
-            m["belief_missed"] += len(self.closed - known)
+            known, n = convoy.known_closed, len(convoy.vessels)
+            m["belief_false"] += n * len(known - self.closed)
+            m["belief_missed"] += n * len(self.closed - known)
+        m["backlog_ticks"] += sum(len(w) for w in self.waiting.values()) * config.DT
         hq = self.hq.hazards.closed()
         m["hq_belief_false"] += len(hq - self.closed)
         m["hq_belief_missed"] += len(self.closed - hq)
@@ -652,12 +840,19 @@ class World:
 
     def summary(self) -> dict[str, Any]:
         m = self.metrics
-        trips = m["trip_times"]
+        lat = m["latencies"]
         energy = round(sum(v.energy for v in self.vessels.values()), 1)
+        sail = m["sail_ticks"]
         out: dict[str, Any] = {
             "ticks": self.t,
             "deliveries": m["deliveries"],
-            "mean_trip_time": round(sum(trips) / len(trips), 1) if trips else None,
+            "mean_latency": round(sum(lat) / len(lat), 1) if lat else None,
+            "generated": m["generated"],
+            "backlog": sum(len(w) for w in self.waiting.values()),
+            "mean_backlog": round(m["backlog_ticks"] / self.t, 1) if self.t else None,
+            "arrivals": m["arrivals"],
+            "load_factor": round(m["load_ticks"] / sail, 3) if sail else None,
+            "empty_distance": round(m["empty_distance"], 1),
             "energy": energy,
             "energy_per_delivery": (
                 round(energy / m["deliveries"], 1) if m["deliveries"] else None
@@ -694,9 +889,9 @@ class World:
         return out
 
     def _spread(self, record: dict[str, Any]) -> dict[str, Any]:
-        """When a decided policy reached half, and all, of the convoys."""
+        """When a decided policy reached half, and all, of the ships."""
         times = sorted(record["adopted"].values())
-        n = len(self.convoys)
+        n = len(self.vessels)
         half = (n + 1) // 2
 
         def after(k: int) -> float | None:
@@ -712,16 +907,20 @@ class World:
 
 def make_fleet(
     network: SeaNetwork,
-    specs: list[tuple[str, tuple[str, ...], int]],
+    specs: list[tuple[str, str, int, str | None]],
     spacing: float = 10.0,
 ) -> tuple[dict[str, Vessel], dict[str, Convoy]]:
-    """Convoys ``(id, port orders, size)`` starting at their first port, in a row."""
+    """Convoys ``(id, port, size, destination)`` at ``port``, in a row.
+
+    With no destination the convoy starts docked, waiting for cargo.
+    """
     vessels: dict[str, Vessel] = {}
     convoys: dict[str, Convoy] = {}
-    for cid, orders, size in specs:
-        x, y = network.nodes[orders[0]]
+    for cid, port, size, dest in specs:
+        x, y = network.nodes[port]
         ids = [f"{cid}.{i}" for i in range(size)]
         for i, vid in enumerate(ids):
             vessels[vid] = Vessel(vid, cid, (x + (i - (size - 1) / 2) * spacing, y))
-        convoys[cid] = Convoy(cid, ids, orders, node=orders[0])
+        state = "docked" if dest is None else "sailing"
+        convoys[cid] = Convoy(cid, ids, port, dest, state=state)
     return vessels, convoys

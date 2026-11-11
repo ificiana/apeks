@@ -59,7 +59,17 @@ class PolicyMsg:
     hops: int = 0
 
 
-type Message = PositionReport | LaneReport | Hazard | PolicyMsg
+@dataclass(frozen=True)
+class Backlog:
+    """A port station's count of packages waiting at ``port``. Never relayed."""
+
+    sender: str
+    port: str
+    waiting: int
+    observed_at: float
+
+
+type Message = PositionReport | LaneReport | Hazard | PolicyMsg | Backlog
 
 
 @dataclass(frozen=True)

@@ -11,7 +11,15 @@ NEAR_MISS = 4.0  # vessels closer than this count as a near miss
 HOLD_WIDTH = 100.0  # lane width assumed while holding at a node or port
 
 # Ports
-SERVICE_TICKS = 40  # time a convoy spends loading or unloading at a berth
+SERVICE_TICKS = 40  # time a convoy spends mooring and casting off at a berth
+
+# Cargo
+CAPACITY = 4  # packages per ship
+MAX_CONVOY = 8  # ships per convoy
+HANDLING_TIME = 5  # ticks per package loaded or unloaded
+REGROUP_EVERY = 10  # ticks between port regroupings
+MAX_WAIT = 100  # docked ticks before a partly full convoy sails
+DEMAND_RATE = 0.01  # packages per tick per port at demand = 1
 
 # Radio
 RADIO_RANGE = 260.0

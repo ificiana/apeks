@@ -20,7 +20,7 @@ def hud_lines(world: World, name: str) -> list[str]:
     s = world.summary()
     lines = [
         f"{name}  t={world.t:.0f}",
-        f"deliveries {s['deliveries']}  mean trip {s['mean_trip_time']}",
+        f"delivered {s['deliveries']}/{s['generated']}  latency {s['mean_latency']}",
         f"near misses {s['near_misses']}  congestion {s['congestion_ticks']:.0f}",
         f"closed {', '.join(sorted(world.closed)) or '-'}",
     ]
@@ -49,8 +49,8 @@ def draw(
     for name_, pos in net.nodes.items():
         is_port = name_ in net.ports
         pygame.draw.circle(surface, PORT if is_port else NODE, pos, 8 if is_port else 4)
-        queued = len(world.queues.get(name_, []))
-        label = f"{name_} q{queued}" if is_port else name_
+        waiting = len(world.waiting.get(name_, []))
+        label = f"{name_} w{waiting}" if is_port else name_
         surface.blit(font.render(label, True, TEXT), add(pos, (10.0, -8.0)))
     convoy_ids = sorted(world.convoys)
     for v in world.vessels.values():

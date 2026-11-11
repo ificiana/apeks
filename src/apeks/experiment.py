@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from apeks import config, scenario
+from apeks.cargo import generate_demand
 from apeks.formation import BoidsFormation, BoidsParams, SlotFormation, SlotParams
 from apeks.hq import Hq
 from apeks.llm import (
@@ -30,7 +31,8 @@ ROUTING_PURPOSE = (
     "w_estimate * estimated lane time + w_cost_to_go * time from the lane end to "
     "the destination + w_report * (recent reported transit - estimate), plus "
     "avoid_penalty for lanes listed in avoid. Lane ids look like 'W2>W3'. "
-    "A convoy never enters a lane it believes closed."
+    "A convoy never enters a lane it believes closed. Destinations are set by "
+    "the cargo the ships carry, not by this policy."
 )
 FORMATION_PURPOSE = (
     "Each vessel steers toward its slot in a convoy shape around the convoy "
@@ -52,6 +54,7 @@ class ExperimentConfig:
     latency: float = config.LLM_LATENCY
     budget: int = config.LLM_BUDGET
     news: NewsSettings = NewsSettings()
+    demand: float = 1.0
 
     def __post_init__(self) -> None:
         for value, allowed in [
@@ -111,7 +114,11 @@ def build_world(cfg: ExperimentConfig, client: LlmClient | None = None) -> World
         derive(cfg.seed, "news"),
         cfg.ticks,
     )
-    vessels, convoys = make_fleet(net, scenario.CONVOYS)
+    fleet = [(f"{port}-start", port, n, None) for port, n in scenario.FLEET.items()]
+    vessels, convoys = make_fleet(net, fleet)
+    packages = generate_demand(
+        sorted(net.ports), config.DEMAND_RATE * cfg.demand, cfg.seed, cfg.ticks
+    )
     authors: dict[str, PolicyAuthor] = {}
     client = client or make_client(cfg)
 
@@ -148,5 +155,6 @@ def build_world(cfg: ExperimentConfig, client: LlmClient | None = None) -> World
         authors=authors,
         news=news,
         hq=Hq(config.UPLINK_DELAY),
+        packages=packages,
         rng=derive(cfg.seed, "reports"),
     )

@@ -1,4 +1,4 @@
-"""The default sea: five ports, four waypoints, a strait, two currents, a storm."""
+"""The default sea: five ports, sixteen ships, a strait, two currents, a storm."""
 
 from apeks.network import SeaNetwork
 from apeks.ocean import Current, Ocean, Storm
@@ -18,7 +18,7 @@ def network() -> SeaNetwork:
         "east": (920.0, 380.0),
         "ne": (800.0, 90.0),
     }.items():
-        net.add_port(name, pos, berths=1)
+        net.add_port(name, pos, berths=4)  # berths count ships
     for name, pos in {
         "W1": (300.0, 300.0),
         "W2": (520.0, 330.0),
@@ -64,9 +64,5 @@ def events() -> list[Event]:
     ]
 
 
-CONVOYS: list[tuple[str, tuple[str, ...], int]] = [
-    ("A", ("north", "east"), 4),
-    ("B", ("west", "ne"), 4),
-    ("C", ("south", "north"), 4),
-    ("D", ("east", "west"), 4),
-]
+FLEET: dict[str, int] = {"north": 4, "west": 3, "south": 3, "east": 3, "ne": 3}
+"""Ships docked at each port at the start, empty."""

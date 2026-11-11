@@ -3,13 +3,14 @@ import random
 import pytest
 
 from apeks import config
+from apeks.cargo import Package
 from apeks.formation import BoidsFormation, BoidsParams
 from apeks.hq import Hq
 from apeks.llm import PolicyAuthor, StubClient
 from apeks.network import SeaNetwork
 from apeks.news import NewsItem
 from apeks.ocean import Ocean, Storm
-from apeks.radio import Hazard, LaneReport, PolicyMsg, Radio
+from apeks.radio import Backlog, Hazard, LaneReport, PolicyMsg, Radio
 from apeks.routing import Report, ScoredRouteParams, ScoredRouting
 from apeks.world import Convoy, Event, Vessel, World, make_fleet, reverse
 
@@ -45,8 +46,14 @@ def make_world(
     news=(),
     delay=0.0,
     range_=500.0,
+    packages=(),
 ) -> World:
-    vessels, convoys = make_fleet(net, specs)
+    """``specs`` are ``(id, (start, destination), size)``; no destination docks."""
+    fleet = [
+        (cid, ports[0], n, ports[1] if len(ports) > 1 else None)
+        for cid, ports, n in specs
+    ]
+    vessels, convoys = make_fleet(net, fleet)
     world = World(
         network=net,
         ocean=ocean or Ocean(),
@@ -59,6 +66,7 @@ def make_world(
         authors=authors or {},
         news=list(news),
         hq=Hq(delay),
+        packages=list(packages),
     )
     world.radio.range = range_
     return world
@@ -81,7 +89,7 @@ def test_vessel_thrust_is_acceleration_limited_and_drift_is_free() -> None:
 
 
 def test_convoy_hears_hazards_policies_and_dedupes_reports() -> None:
-    c = Convoy("c", ["c.0"], ("P", "Q"), node="P")
+    c = Convoy("c", ["c.0"], "P", "Q")
     closed = Hazard("x.0", "P>Q", True, 10.0, "x")
     assert c.hear(closed, 10.0) == "changed"
     assert c.known_closed == {"P>Q", "Q>P"}
@@ -107,7 +115,7 @@ def test_reverse_lane_id() -> None:
 
 
 def test_make_fleet_lines_vessels_up_at_first_port() -> None:
-    vessels, convoys = make_fleet(line_net(), [("c", ("Q", "P"), 3)], spacing=10.0)
+    vessels, convoys = make_fleet(line_net(), [("c", "Q", 3, "P")], spacing=10.0)
     assert [vessels[v].pos for v in convoys["c"].vessels] == [
         (190.0, 0.0),
         (200.0, 0.0),
@@ -118,10 +126,11 @@ def test_make_fleet_lines_vessels_up_at_first_port() -> None:
 
 def test_convoy_sails_delivers_and_shares_a_lane_report() -> None:
     world = make_world(line_net(), [("c", ("P", "Q"), 2)])
+    world.vessels["c.0"].cargo = [Package("P#0", "P", "Q", 0.0)]
     run(world, 400)
     s = world.summary()
-    assert s["deliveries"] >= 1
-    assert s["mean_trip_time"] > 0
+    assert s["deliveries"] == 1
+    assert s["mean_latency"] > 0
     assert s["energy"] > 0
     assert world.convoys["c"].reports["P>Q"][0].transit > 0
     assert s["radio"]["sent"] > 0
@@ -219,17 +228,19 @@ def test_lane_reports_are_noisy_on_air_but_exact_for_the_sender() -> None:
 
 def test_single_berth_makes_second_convoy_wait() -> None:
     net = line_net()
-    world = make_world(net, [("a", ("Q", "P", "Q"), 1), ("b", ("Q", "P", "Q"), 1)])
-    for c in world.convoys.values():
-        c.order_idx = 0
+    world = make_world(net, [("a", ("P", "P"), 1), ("b", ("P", "P"), 1)])
+    world.vessels["a.0"].cargo = [Package("Q#0", "Q", "P", 0.0)]
     world.step()
     assert world.convoys["a"].state == "berthed"
     assert world.convoys["b"].state == "queued"
-    run(world, config.SERVICE_TICKS)
+    service = config.SERVICE_TICKS + config.HANDLING_TIME
+    assert world.convoys["a"].service_until == service
+    run(world, service)
     assert world.metrics["deliveries"] == 1
-    assert world.convoys["a"].state == "sailing"
+    assert world.convoys["a"].state == "docked"
     assert world.convoys["b"].state == "berthed"
-    assert world.metrics["wait_ticks"] == config.SERVICE_TICKS
+    assert world.metrics["wait_ticks"] == service
+    assert world.metrics["arrivals"] == 2
 
 
 def test_overfull_lane_counts_congestion_and_slows() -> None:
@@ -306,7 +317,7 @@ def test_station_ignores_beacons_and_policies() -> None:
     world.convoys["c"].outbox.append(PolicyMsg("c.0", "routing", 1, None, hops=1))
     world.step()
     assert world.stations["P"].policies == {}
-    assert world.hq._inbox == []
+    assert all(isinstance(m, Backlog) for _, m in world.hq._inbox)
 
 
 def test_situation_is_built_from_what_reached_hq() -> None:
@@ -335,12 +346,13 @@ def test_situation_is_built_from_what_reached_hq() -> None:
 def test_summary_without_trips_has_no_mean() -> None:
     world = make_world(line_net(), [("c", ("P", "Q"), 1)])
     s = world.summary()
-    assert s["mean_trip_time"] is None and s["energy_per_delivery"] is None
+    assert s["mean_latency"] is None and s["energy_per_delivery"] is None
     assert s["beliefs"]["belief_false"] == 0
 
 
 def test_summary_energy_per_delivery() -> None:
     world = make_world(line_net(), [("c", ("P", "Q"), 2)])
+    world.vessels["c.1"].cargo = [Package("P#0", "P", "Q", 0.0)]
     run(world, 400)
     s = world.summary()
     assert s["energy_per_delivery"] == round(s["energy"] / s["deliveries"], 1)
@@ -385,7 +397,6 @@ def test_tracer_records_decisions_events_and_snapshots() -> None:
         "event",
         "policy_request",
         "hazard_seen",
-        "hazard_heard",
         "news",
         "policy_decided",
         "policy_at_ports",
@@ -395,7 +406,6 @@ def test_tracer_records_decisions_events_and_snapshots() -> None:
         "queued",
         "berthed",
         "delivered",
-        "near_miss",
         "snapshot",
     } <= kinds
     snaps = [r for r in records if r["kind"] == "snapshot"]
@@ -406,9 +416,9 @@ def test_tracer_records_decisions_events_and_snapshots() -> None:
     assert "prompt" in next(r for r in records if r["kind"] == "policy_request")
     static = world.static()
     assert static["convoys"][0] == {
-        "id": "a",
-        "orders": ("P", "Q"),
-        "vessels": ["a.0", "a.1"],
+        "id": "Q-0",
+        "port": "Q",
+        "vessels": ["a.0", "a.1", "b.0"],
     }
 
 
@@ -431,3 +441,69 @@ def test_storms_forming_and_clearing_are_logged() -> None:
     run(world, 4)
     assert any("storm forming" in line for line in world.log)
     assert any("cleared" in line for line in world.log)
+
+
+def test_regroup_merges_docks_loads_and_sends_full_ships() -> None:
+    pkgs = [Package(f"P#{i}", "P", "Q", 0.0) for i in range(8)]
+    world = make_world(
+        line_net(),
+        [("a", ("P",), 1), ("b", ("P",), 1), ("c", ("P",), 1)],
+        packages=pkgs,
+    )
+    world.convoys["b"].policies["routing"] = (3, world.policies["routing"][1])
+    world.adoption[("routing", 3)] = {"decided": 0.0, "adopted": {"b.0": 0.0}}
+    world.convoys["a"].backlogs["P"] = (2, 1.0)
+    world.step()
+    assert set(world.convoys) == {"P-0", "P-1"}
+    gone, rest = world.convoys["P-0"], world.convoys["P-1"]
+    assert gone.vessels == ["a.0", "b.0"] and gone.state == "loading"
+    assert gone.destination == "Q" and gone.service_until == 4 * config.HANDLING_TIME
+    assert rest.vessels == ["c.0"] and rest.state == "docked"
+    assert world.vessels["c.0"].cargo == [] and world.waiting["P"] == []
+    assert gone.policies["routing"][0] == 3 and gone.backlogs["P"] == (2, 1.0)
+    assert world.adoption[("routing", 3)]["adopted"] == {
+        "a.0": 0.0,
+        "b.0": 0.0,
+        "c.0": 0.0,
+    }
+    run(world, int(gone.service_until))
+    assert gone.state == "sailing"
+
+
+def test_regroup_after_max_wait_sends_everyone_and_counts_empty_sailing() -> None:
+    world = make_world(line_net(), [("a", ("P",), 2)])
+    world.convoys["a"].backlogs["Q"] = (3, 1e6)
+    world.step()
+    assert set(world.convoys) == {"a"}
+    run(world, config.MAX_WAIT)
+    (convoy,) = world.convoys.values()
+    assert convoy.vessels == ["a.0", "a.1"] and convoy.destination == "Q"
+    run(world, 20)
+    s = world.summary()
+    assert s["empty_distance"] > 0 and s["load_factor"] == 0.0
+    assert s["arrivals"] == 0 and s["backlog"] == 0
+
+
+def test_lone_docked_convoy_with_nowhere_to_go_stays() -> None:
+    world = make_world(line_net(), [("a", ("P",), 1)])
+    run(world, config.MAX_WAIT + 1)
+    assert list(world.convoys) == ["a"]
+
+
+def test_convoy_absorbs_knowledge_and_hears_backlogs() -> None:
+    a, b = Convoy("a", ["a.0"], "P"), Convoy("b", ["b.0"], "P")
+    b.hazards.update("P>Q", True, 5.0, "x")
+    b._add_report(("x", "P>Q", 5.0), Report(9.0, 5.0))
+    b.policies["routing"] = (2, "p")
+    a.policies["routing"] = (4, "q")
+    assert a.hear(Backlog("port:Q", "Q", 3, 2.0), 2.0) is None
+    assert a.hear(Backlog("port:Q", "Q", 1, 1.0), 2.0) is None
+    b.backlogs = {"Q": (7, 9.0), "R": (1, 0.0)}
+    a.absorb(b)
+    a.absorb(b)
+    assert a.known_closed == {"P>Q"}
+    assert a.reports == {"P>Q": [Report(9.0, 5.0)]}
+    assert a.policies["routing"] == (4, "q")
+    assert a.backlogs == {"Q": (7, 9.0), "R": (1, 0.0)}
+    k = a.knowledge()
+    assert k["backlogs"] == a.backlogs and k["backlogs"] is not a.backlogs

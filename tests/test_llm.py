@@ -44,6 +44,7 @@ def test_prompt_has_grounded_sections_and_fences_the_news() -> None:
         ],
         "policy_version": 4,
         "deliveries": 1,
+        "port_backlogs": {"P": {"waiting": 7, "age": 12}},
     }
     text = build_prompt(
         "routing", "Choose lanes.", ScoredRouteParams, ScoredRouteParams(), situation
@@ -53,6 +54,7 @@ def test_prompt_has_grounded_sections_and_fences_the_news() -> None:
         "# Map (fixed ground truth)",
         "# Fleet reports via port stations",
         "# News feed",
+        "# Port backlogs via port stations",
         "# Current policy (version 4)",
         "# Policy fields",
     ]:
@@ -63,6 +65,7 @@ def test_prompt_has_grounded_sections_and_fences_the_news() -> None:
     assert '"A>B"' in text and '"ports": ["P"]' in text
     assert "- avoid: list of names" in text and '"avoid": []' in text
     assert "Trigger: news: gale" in text
+    assert '{"P": {"waiting": 7, "age": 12}}' in text
     empty = build_prompt("routing", "", ScoredRouteParams, ScoredRouteParams(), {})
     assert "(no news yet)" in empty and "(version 0)" in empty
 

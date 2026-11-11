@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from apeks import runner, scenario
+from apeks import config, runner, scenario
 from apeks.experiment import (
     ExperimentConfig,
     build_world,
@@ -19,14 +19,30 @@ from apeks.trace import read_trace
 ARMS = Path(__file__).parent.parent / "experiments"
 
 
-def test_scenario_has_strait_and_every_convoy_can_reach_its_ports() -> None:
+def test_scenario_has_strait_and_every_port_reaches_every_other() -> None:
     net = scenario.network()
     assert net.lanes[scenario.STRAIT].capacity == 1
     ocean = scenario.ocean()
-    for _, orders, _ in scenario.CONVOYS:
-        for a, b in zip(orders, orders[1:] + orders[:1], strict=True):
+    for a in net.ports:
+        for b in net.ports:
             assert net.times_to(b, ocean, 0.0, 1.8)[a] < float("inf")
     assert [e.kind for e in scenario.events()] == ["close", "open"]
+    assert sum(scenario.FLEET.values()) == 16 and set(scenario.FLEET) == set(net.ports)
+
+
+def test_world_starts_docked_with_seeded_demand(tmp_path: Path) -> None:
+    world = build_world(ExperimentConfig(seed=3))
+    assert len(world.vessels) == 16
+    assert {c.state for c in world.convoys.values()} == {"docked"}
+    assert world.packages == build_world(ExperimentConfig(seed=3)).packages
+    assert world.packages != build_world(ExperimentConfig(seed=4)).packages
+    rate = config.DEMAND_RATE * len(world.network.ports) * 6000
+    assert 0.7 * rate < len(world.packages) < 1.3 * rate
+    double = build_world(ExperimentConfig(seed=3, demand=2.0))
+    assert len(double.packages) > 1.5 * len(world.packages)
+    path = tmp_path / "d.toml"
+    path.write_text('name = "d"\ndemand = 0.5\n')
+    assert load_config(path).demand == 0.5
 
 
 @pytest.mark.parametrize(
