@@ -11,13 +11,24 @@ Autonomous cargo vessels carry packages between ports. Ships bound for the
 same port sail together as a convoy, for shared sensing and mutual safety. The sea is a directed graph of lanes
 between ports and waypoints:
 
-- Currents, waves and a passing storm make a lane's cost depend on its
-  direction: `W1>W2` and `W2>W1` are different edges.
-- Lanes have a width and a capacity. The strait `W2>W3` is short but single
-  file, and convoys sharing an overfull lane slow down.
+- Currents, waves and storms make a lane's cost depend on its direction:
+  `W1>W2` and `W2>W1` are different edges.
+- Lanes have a width and a capacity, and convoys sharing an overfull lane slow
+  down.
 - Ports have berths, counted in ships. Convoys queue, berth and unload, and
   their ships join the port's dock.
-- Disruptions: a storm (t 1500–2500) and a grounded vessel closing the strait
+- Disruptions: storms, and lanes closed for a while by a grounded vessel.
+
+Two maps are available:
+
+- **generated** (the default, `mapgen.py`): a seeded landmass and ocean. Ports
+  sit on the shore and as many waypoints in open water. Each node gets lanes to
+  its `adjacency` nearest nodes in line of sight, and waypoints are added along
+  water paths until the whole map is connected. The area grows with the number
+  of ports. Every 5 ports add 1 storm, 1 lane closure and 2 currents, placed
+  and timed from the seed; a closure never cuts the map in two.
+- **classic** (`scenario.py`): the fixed five-port map of reports 1–7, with a
+  single-file strait `W2>W3`, a storm (t 1500–2500) and the strait closed
   (t 3000–4000).
 
 Two decisions are made over and over:
@@ -150,11 +161,15 @@ config:
 | `llm_routing.toml` | llm | boids |
 | `llm_formation.toml` | aco | llm |
 
-Other config keys: `seed`, `ticks`, `demand` (scales `DEMAND_RATE`, default 1), `llm` (`stub`, `ollama`, `claude`, or `""` for arms without an LLM module), `model`, `url`,
+Other config keys: `map` (`generated` or `classic`), `ports` and `adjacency`
+(generated map only; defaults 5 and 3), `seed`, `ticks`, `demand` (scales `DEMAND_RATE`, default 1), `llm` (`stub`, `ollama`, `claude`, or `""` for arms without an LLM module), `model`, `url`,
 `latency`, `budget`, and the `[news]` table.
 
 A list of seeds (`seed = [0, 1, 2]`) makes a sweep: one run per seed, named
-`<name>_s<seed>`. Each arm has a `<arm>_sweep.toml` covering seeds 0–10.
+`<name>_s<seed>`. Lists of `ports` and `adjacency` expand the same way, into
+every combination, named `<name>_p<ports>_k<adjacency>_s<seed>` (only the
+keys given as lists appear in the name). `classical_scale.toml` sweeps ports
+and adjacency on one seed. Each arm has a `<arm>_sweep.toml` covering seeds 0–10.
 `apeks-run` runs all runs in parallel, one process per CPU; `-j N` sets the
 number of processes.
 
@@ -195,11 +210,16 @@ uv sync
 git config core.hooksPath .githooks
 
 uv run apeks                                # window, classical arm
-uv run apeks experiments/llm.toml           # window, any arm; space pauses, up/down speed
+uv run apeks experiments/llm.toml           # window, any arm
 uv run apeks-run experiments/*.toml         # headless, one JSON summary line per arm
 uv run apeks-run experiments/*.toml --llm stub   # offline, no LLM calls
 uv run apeks-run experiments/llm.toml --llm ollama --ticks 3500
 ```
+
+The window is a dashboard: the map on the left (drag or WASD to pan, wheel or
++/- to zoom, F to fit, a minimap of the whole sea), a panel on the right with
+the headline figures, delivered and backlog charts, a port table and the event
+log, and a status bar. Space pauses, up/down change speed, Esc quits.
 
 `--ticks`, `--llm` and `--model` override every config. Each arm saves two files under
 `logs/` (git-ignored; `--logs DIR` to change), stamped with the invocation's
@@ -280,11 +300,13 @@ a logged-in `claude` CLI on `PATH`. Calls take a few seconds each.
 | `src/apeks/formation.py` | Boids and slot formation engines |
 | `src/apeks/llm.py` | LLM clients (stub, Ollama, Claude Code) and the policy author |
 | `src/apeks/world.py` | vessels, convoys, ports, events, metrics, the step loop |
-| `src/apeks/scenario.py` | the default map, ocean, events and fleet |
+| `src/apeks/mapgen.py` | seeded landmass, shore ports, connected lanes, events |
+| `src/apeks/scenario.py` | the classic map, ocean, events and fleet |
 | `src/apeks/experiment.py` | experiment configs and world assembly |
 | `src/apeks/runner.py` | headless CLI |
 | `src/apeks/trace.py` | JSONL trace writer and reader |
-| `src/apeks/render.py`, `app.py` | pygame drawing and the window |
+| `src/apeks/render.py` | the dashboard: camera, history, layout, input, drawing |
+| `src/apeks/app.py` | the window and its event loop |
 
 ## Development
 

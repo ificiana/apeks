@@ -1,11 +1,8 @@
 from pathlib import Path
 
-import pygame
-
-from apeks import scenario
-from apeks.app import SPEEDS, change_speed, parse_args
-from apeks.experiment import ExperimentConfig, build_world
-from apeks.render import draw, hud_lines
+from apeks.app import advance, parse_args, start
+from apeks.experiment import ExperimentConfig
+from apeks.render import SPEEDS, layout
 
 ARMS = Path(__file__).parent.parent / "experiments"
 
@@ -15,30 +12,34 @@ def test_parse_args_defaults_and_loads_config() -> None:
     assert parse_args([str(ARMS / "llm.toml")]).routing == "llm"
 
 
-def test_speed_steps_are_clamped() -> None:
-    assert change_speed(0, -1) == 0
-    assert change_speed(0, 1) == 1
-    assert change_speed(len(SPEEDS) - 1, 1) == len(SPEEDS) - 1
+def test_start_fits_the_whole_map_in_the_map_view() -> None:
+    world, ui, cam, history = start(ExperimentConfig(seed=24008), size=(1200, 700))
+    geo = world.geography
+    assert ui.world_size == (geo.width, geo.height)
+    assert cam.view == tuple(layout((1200, 700))["map"])
+    x0, y0 = cam.to_screen((0.0, 0.0))
+    x1, y1 = cam.to_screen((geo.width, geo.height))
+    assert x0 >= 0 and y0 >= 0 and x1 <= cam.view[2] + 1e-9 and y1 <= cam.view[3] + 1e-9
+    assert list(history.ticks) == [0.0]
 
 
-def test_hud_shows_metrics_closures_and_llm_stats() -> None:
-    world = build_world(ExperimentConfig(routing="llm"))
-    world.step()
-    world.closed = {"W2>W3"}
-    lines = hud_lines(world, "llm")
-    assert lines[0] == "llm  t=1"
-    assert "closed W2>W3" in lines
-    assert any(line.startswith("llm routing: 1 calls") for line in lines)
+def test_advance_steps_by_speed_until_paused_or_done() -> None:
+    world, ui, _, history = start(ExperimentConfig(map="classic"))
+    ui.speed = 2
+    advance(world, ui, history, ticks=100)
+    assert world.t == SPEEDS[2]
+    ui.paused = True
+    advance(world, ui, history, ticks=100)
+    assert world.t == SPEEDS[2]
+    ui.paused, ui.speed = False, len(SPEEDS) - 1
+    advance(world, ui, history, ticks=7)
+    assert world.t == 7
 
 
-def test_draw_paints_storms_closures_and_vessels() -> None:
-    pygame.init()
-    surface = pygame.Surface((scenario.WIDTH, scenario.HEIGHT))
-    font = pygame.font.Font(None, 14)
-    world = build_world(ExperimentConfig())
-    world.t = 2000.0
-    world.closed = {"W2>W3"}
-    draw(surface, world, "classical", font)
-    vessel = world.vessels["P1-start.0"].pos
-    assert surface.get_at((int(vessel[0]), int(vessel[1])))[:3] == (255, 170, 60)
-    pygame.quit()
+def test_headless_runner_does_not_load_pygame() -> None:
+    import subprocess
+    import sys
+
+    code = "import sys, apeks.runner; print('pygame' in sys.modules)"
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert out.stdout.strip() == "False"

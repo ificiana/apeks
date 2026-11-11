@@ -159,6 +159,7 @@ def test_cli_runs_sweep_in_parallel_in_seed_order(tmp_path, capsys) -> None:
     assert len(list(out.iterdir())) == 3
     assert runner.main([*args, "--jobs", "1"]) == 0
     serial = [json.loads(x) for x in capsys.readouterr().out.splitlines()]
+    assert all(x.pop("timing")["wall_s"] >= 0 for x in serial + parallel)
     assert serial == parallel
 
 
@@ -213,3 +214,40 @@ def test_news_table_configures_the_feed(tmp_path: Path) -> None:
     bad.write_text("[news]\nloudness = 2\n")
     with pytest.raises(ValueError, match="loudness"):
         load_config(bad)
+
+
+def test_world_is_built_on_a_generated_or_the_classic_sea() -> None:
+    world = build_world(ExperimentConfig(seed=24008, ports=10, adjacency=2))
+    assert len(world.network.ports) == 10
+    assert len(world.vessels) == 10 * config.SHIPS_PER_PORT
+    assert world.geography.width > scenario.WIDTH
+    assert {e.kind for e in world.events} == {"close", "open"}
+    classic = build_world(ExperimentConfig(map="classic"))
+    assert scenario.STRAIT in classic.network.lanes
+    assert not classic.geography.is_land((500.0, 350.0))
+    with pytest.raises(ValueError, match="atlantis"):
+        ExperimentConfig(map="atlantis")
+
+
+def test_port_and_adjacency_lists_expand_with_seeds(tmp_path: Path) -> None:
+    sweep = tmp_path / "scale.toml"
+    sweep.write_text('name = "c"\nports = [5, 10]\nadjacency = [2, 3]\nseed = [7]\n')
+    cfgs = load_configs(sweep)
+    assert [(c.name, c.ports, c.adjacency, c.seed) for c in cfgs] == [
+        ("c_p5_k2_s7", 5, 2, 7),
+        ("c_p5_k3_s7", 5, 3, 7),
+        ("c_p10_k2_s7", 10, 2, 7),
+        ("c_p10_k3_s7", 10, 3, 7),
+    ]
+
+
+def test_run_times_each_phase_and_describes_the_map() -> None:
+    result = runner.run(ExperimentConfig(ticks=20, ports=10))
+    timing = result["timing"]
+    assert set(timing["phases"]) == set(runner.PHASES)
+    assert all(v >= 0 for v in timing["phases"].values())
+    assert timing["wall_s"] >= sum(timing["phases"].values())
+    assert timing["build_s"] >= 0 and timing["per_tick_ms"] > 0
+    m = result["map"]
+    assert m["ports"] == 10 and m["nodes"] >= 20 and m["lanes"] > 0
+    assert m["adjacency"] == 3 and m["kind"] == "generated"

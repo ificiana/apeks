@@ -1,0 +1,9 @@
+name = "classical"
+routing = "aco"
+formation = "boids"
+seed = 24008
+ticks = 6000
+llm = ""
+model = ""
+ports = [5, 10, 20, 40]
+adjacency = [2, 3, 4]

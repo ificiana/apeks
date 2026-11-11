@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict, replace
 from datetime import datetime
@@ -13,6 +14,9 @@ from typing import Any
 from apeks.experiment import BACKENDS, ExperimentConfig, build_world, load_configs
 from apeks.llm import LlmClient
 from apeks.trace import Tracer
+from apeks.world import PHASES
+
+__all__ = ["PHASES", "main", "run", "run_job"]
 
 
 def run(
@@ -20,14 +24,31 @@ def run(
     client: LlmClient | None = None,
     tracer: Tracer | None = None,
 ) -> dict[str, Any]:
+    start = time.perf_counter()
     world = build_world(cfg, client)
+    built = time.perf_counter()
     world.tracer = tracer
     if tracer is not None:
         tracer.emit(0.0, "meta", config=asdict(cfg), **world.static())
     for _ in range(cfg.ticks):
         world.step()
+    wall = time.perf_counter() - built
+    net = world.network
     return {
         "config": asdict(cfg),
+        "map": {
+            "kind": cfg.map,
+            "ports": len(net.ports),
+            "nodes": len(net.nodes),
+            "lanes": len(net.lanes) // 2,
+            "adjacency": cfg.adjacency,
+        },
+        "timing": {
+            "build_s": built - start,
+            "wall_s": wall,
+            "per_tick_ms": 1000 * wall / max(1, cfg.ticks),
+            "phases": dict(world.timings),
+        },
         "summary": world.summary(),
         "events": world.log,
         "llm_log": {m: a.log for m, a in world.authors.items()},
@@ -49,7 +70,12 @@ def run_job(job: tuple[ExperimentConfig, Path, str, bool, int]) -> str:
         result = run(cfg)
     out_path = logs / f"out_{cfg.name}_{stamp}.json"
     out_path.write_text(json.dumps(result, indent=2))
-    line = {"name": cfg.name, **result["summary"]}
+    line = {
+        "name": cfg.name,
+        **result["summary"],
+        "map": result["map"],
+        "timing": result["timing"],
+    }
     line.pop("delivery_times")
     return json.dumps(line)
 

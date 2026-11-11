@@ -20,11 +20,11 @@ Guidance for Claude Code in this repository. The global rules apply: strict TDD,
 ## Layout
 
 - `src/apeks/config.py`: constants only.
-- Pure simulation, no pygame: `seeds`, `geometry`, `ocean`, `network`, `radio`, `hazards`, `cargo`, `hq`, `news`, `policy`, `routing`, `formation`, `llm`, `world`, `scenario`, `experiment`, `runner`, `trace`.
+- Pure simulation, no pygame: `seeds`, `geometry`, `ocean`, `network`, `mapgen`, `radio`, `hazards`, `cargo`, `hq`, `news`, `policy`, `routing`, `formation`, `llm`, `world`, `scenario`, `experiment`, `runner`, `trace`.
 - Only `World` holds the truth (closures, storms, transit times). Convoys, port stations and HQ act on beliefs that reach them by radio, uplink or news. Every random stream comes from `seeds.derive(seed, name)`.
 - Engines read their parameters from the observation (`obs.params`), since each convoy holds its own policy version. Engines share one observation API per module; the word "pheromone" stays inside the ACO engine.
-- `src/apeks/render.py`: drawing onto a `pygame.Surface`.
-- `src/apeks/app.py`: `parse_args`, `change_speed` and `main`, the window and event loop.
+- `src/apeks/render.py`: the dashboard (`Camera`, `History`, `layout`, `handle_event`, `draw`) onto a `pygame.Surface`.
+- `src/apeks/app.py`: `parse_args`, `start`, `advance` and `main`, the window and event loop.
 - `experiments/`: one TOML config per arm.
 - `tests/`: pytest; `conftest.py` seeds `random` and selects the SDL dummy video driver, so tests run offline and headless. LLM calls use `StubClient` or a faked `urlopen`.
 

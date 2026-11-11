@@ -104,3 +104,18 @@ def test_times_to_skips_unreachable_and_impassable() -> None:
     times = net.times_to("B", Ocean(base=(0.0, 5.0)), 0.0, 2.0)
     assert "Z" not in times
     assert times == {"B": 0.0}
+
+
+def test_times_to_reuses_precomputed_lane_times() -> None:
+    net = make_net()
+    costs = net.lane_times(Ocean(), 0.0, 2.0)
+    assert costs["A>W"] == 50.0 and set(costs) == set(net.lanes)
+
+    def boom(*_):
+        raise AssertionError("lane estimated again")
+
+    net.transit_estimate = boom
+    times = net.times_to("B", Ocean(), 0.0, 2.0, costs=costs)
+    assert times["A"] == 100.0
+    detour = net.times_to("B", Ocean(), 0.0, 2.0, {"W>B"}, costs=costs)
+    assert detour["A"] == pytest.approx(math.hypot(100, 100))

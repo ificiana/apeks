@@ -1,6 +1,7 @@
 """The default sea: five ports, fifteen ships, a strait, two currents, a storm."""
 
 from apeks import config
+from apeks.mapgen import Geography, Sea
 from apeks.network import SeaNetwork
 from apeks.ocean import Current, Ocean, Storm
 from apeks.world import Event
@@ -67,3 +68,8 @@ def events() -> list[Event]:
 
 FLEET: dict[str, int] = {"P1": 3, "P2": 3, "P3": 3, "P4": 3, "P5": 3}
 """Ships docked at each port at the start, empty."""
+
+
+def sea() -> Sea:
+    """The classic sea as a ``Sea``: open water, no land."""
+    return Sea(network(), ocean(), events(), FLEET, Geography.open_sea(WIDTH, HEIGHT))

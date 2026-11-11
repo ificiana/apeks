@@ -1,11 +1,12 @@
 """Experiment configs: which engine runs each module, and how to build the world."""
 
+import itertools
 import tomllib
 from dataclasses import dataclass, fields, replace
 from pathlib import Path
 from typing import Any
 
-from apeks import config, scenario
+from apeks import config, mapgen, scenario
 from apeks.cargo import generate_demand
 from apeks.formation import BoidsFormation, BoidsParams, SlotFormation, SlotParams
 from apeks.hq import Hq
@@ -25,6 +26,9 @@ from apeks.world import World, make_fleet
 ROUTING = ("aco", "llm")
 FORMATION = ("boids", "llm")
 BACKENDS = ("stub", "ollama", "claude")
+MAPS = ("generated", "classic")
+SWEPT = (("ports", "p"), ("adjacency", "k"), ("seed", "s"))
+"""Keys a TOML may give as lists, in name order, with their name suffix."""
 
 ROUTING_PURPOSE = (
     "At every waypoint a convoy scores its open lanes and takes the lowest score: "
@@ -55,12 +59,16 @@ class ExperimentConfig:
     budget: int = config.LLM_BUDGET
     news: NewsSettings = NewsSettings()
     demand: float = 1.0
+    map: str = "generated"
+    ports: int = 5
+    adjacency: int = 3
 
     def __post_init__(self) -> None:
         for value, allowed in [
             (self.routing, ROUTING),
             (self.formation, FORMATION),
             (self.llm, ("", *BACKENDS)),
+            (self.map, MAPS),
         ]:
             if value not in allowed:
                 raise ValueError(f"{value!r} is not one of {allowed}")
@@ -69,7 +77,11 @@ class ExperimentConfig:
 
 
 def load_configs(path: Path) -> list[ExperimentConfig]:
-    """One config per run; a list of seeds expands to ``<name>_s<seed>`` runs."""
+    """One config per run.
+
+    Lists of ports, adjacency or seeds expand to every combination, named
+    ``<name>_p<ports>_k<adjacency>_s<seed>`` for the keys given as lists.
+    """
     data: dict[str, Any] = tomllib.loads(path.read_text())
     known = {f.name for f in fields(ExperimentConfig)}
     unknown = set(data) - known
@@ -81,11 +93,16 @@ def load_configs(path: Path) -> list[ExperimentConfig]:
         if bad:
             raise ValueError(f"unknown [news] keys in {path}: {sorted(bad)}")
         data["news"] = NewsSettings(**data["news"])
-    seeds = data.get("seed", 0)
-    if not isinstance(seeds, list):
-        return [ExperimentConfig(**data)]
-    base = ExperimentConfig(**{k: v for k, v in data.items() if k != "seed"})
-    return [replace(base, seed=seed, name=f"{base.name}_s{seed}") for seed in seeds]
+    swept = [(k, tag, data.pop(k)) for k, tag in SWEPT if isinstance(data.get(k), list)]
+    base = ExperimentConfig(**data)
+    runs = []
+    for values in itertools.product(*(v for _, _, v in swept)):
+        chosen = {k: v for (k, _, _), v in zip(swept, values, strict=True)}
+        name = base.name + "".join(
+            f"_{tag}{v}" for (_, tag, _), v in zip(swept, values, strict=True)
+        )
+        runs.append(replace(base, name=name, **chosen))
+    return runs
 
 
 def load_config(path: Path) -> ExperimentConfig:
@@ -102,9 +119,12 @@ def make_client(cfg: ExperimentConfig) -> LlmClient:
 
 
 def build_world(cfg: ExperimentConfig, client: LlmClient | None = None) -> World:
-    net = scenario.network()
-    ocean = scenario.ocean()
-    events = scenario.events()
+    sea = (
+        scenario.sea()
+        if cfg.map == "classic"
+        else mapgen.generate(cfg.seed, cfg.ports, cfg.adjacency, cfg.ticks)
+    )
+    net, ocean, events = sea.network, sea.ocean, list(sea.events)
     news = generate(
         events,
         ocean.storms,
@@ -114,7 +134,7 @@ def build_world(cfg: ExperimentConfig, client: LlmClient | None = None) -> World
         derive(cfg.seed, "news"),
         cfg.ticks,
     )
-    fleet = [(f"{port}-start", port, n, None) for port, n in scenario.FLEET.items()]
+    fleet = [(f"{port}-start", port, n, None) for port, n in sea.fleet.items()]
     vessels, convoys = make_fleet(net, fleet)
     packages = generate_demand(
         sorted(net.ports), config.DEMAND_RATE * cfg.demand, cfg.seed, cfg.ticks
@@ -157,4 +177,5 @@ def build_world(cfg: ExperimentConfig, client: LlmClient | None = None) -> World
         hq=Hq(config.UPLINK_DELAY),
         packages=packages,
         rng=derive(cfg.seed, "reports"),
+        geography=sea.geography,
     )

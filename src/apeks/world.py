@@ -20,8 +20,9 @@ holds from their observation.
 import copy
 import math
 import random
+import time
 from dataclasses import dataclass, field, replace
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from apeks import config
 from apeks.cargo import Package, detours, group, load, next_port, target_port
@@ -53,6 +54,9 @@ from apeks.radio import (
 )
 from apeks.routing import Report, RouteObservation, RouteOption
 from apeks.trace import Tracer
+
+if TYPE_CHECKING:
+    from apeks.mapgen import Geography
 
 
 class RoutingEngine(Protocol):
@@ -202,6 +206,10 @@ class Event:
     text: str
 
 
+PHASES = ("events", "llm", "radio", "convoys", "ports", "move", "safety", "trace")
+"""Parts of a tick that ``World.timings`` times separately."""
+
+
 @dataclass
 class World:
     network: SeaNetwork
@@ -223,6 +231,11 @@ class World:
     queues: dict[str, list[str]] = field(default_factory=dict)
     log: list[str] = field(default_factory=list)
     tracer: Tracer | None = None
+    geography: Geography | None = None
+    _costs: tuple[Any, dict[str, float]] | None = None
+    timings: dict[str, float] = field(
+        default_factory=lambda: dict.fromkeys(PHASES, 0.0)
+    )
     metrics: dict[str, Any] = field(
         default_factory=lambda: {
             "deliveries": 0,
@@ -271,6 +284,17 @@ class World:
 
     def cruise(self) -> float:
         return config.MAX_SPEED * config.CRUISE_FRACTION
+
+    def lane_costs(self) -> dict[str, float]:
+        """Charted transit time of every lane, recomputed when the drift changes.
+
+        The mean drift depends on time only through which storms are active.
+        """
+        key = (self.ocean, self.ocean.active_storms(self.t))
+        if self._costs is None or self._costs[0] != key:
+            costs = self.network.lane_times(self.ocean, self.t, self.cruise())
+            self._costs = (key, costs)
+        return self._costs[1]
 
     def situation(self, trigger: str) -> dict[str, Any]:
         """HQ's briefing: the chart, what ships reported via ports, the news."""
@@ -391,22 +415,39 @@ class World:
     # ----- step ----------------------------------------------------------
 
     def step(self) -> None:
+        for name, phase in (
+            ("events", self._events_phase),
+            ("llm", self._llm_phase),
+            ("radio", self._radio),
+            ("convoys", self._convoys),
+            ("ports", self._ports),
+            ("move", self._move),
+            ("safety", self._safety_phase),
+            ("trace", self._trace_phase),
+        ):
+            start = time.perf_counter()
+            phase()
+            self.timings[name] += time.perf_counter() - start
+        self.t += config.DT
+
+    def _events_phase(self) -> None:
         self._apply_events()
         self._release()
+
+    def _llm_phase(self) -> None:
         triggers = ["mission start"] if self.t == 0 else []
         triggers += self._read_news()
         triggers += self.hq.receive(self.t)
         self._authors(triggers)
         self._send_down()
-        self._radio()
-        self._convoys()
-        self._ports()
-        self._move()
+
+    def _safety_phase(self) -> None:
         self._near_misses()
         self._beliefs()
+
+    def _trace_phase(self) -> None:
         if self.tracer is not None and self.tracer.wants_snapshot(self.t):
             self._emit("snapshot", **self.snapshot())
-        self.t += config.DT
 
     def _apply_events(self) -> None:
         """Change the true state of the sea. Nobody is told."""
@@ -577,14 +618,15 @@ class World:
     def _route_options(self, convoy: Convoy) -> RouteObservation:
         net = self.network
         known = convoy.known_closed
+        costs = self.lane_costs()
         to_go = net.times_to(
-            str(convoy.destination), self.ocean, self.t, self.cruise(), known
+            str(convoy.destination), self.ocean, self.t, self.cruise(), known, costs
         )
         options = tuple(
             RouteOption(
                 lane=lane.id,
                 to_node=lane.b,
-                estimate=net.transit_estimate(lane, self.ocean, self.t, self.cruise()),
+                estimate=costs[lane.id],
                 cost_to_go=to_go.get(lane.b, math.inf),
                 reports=tuple(convoy.reports.get(lane.id, ())),
             )
@@ -706,11 +748,12 @@ class World:
 
     def _charted_times(self, port: str, known: set[str]) -> dict[str, float]:
         """Charted sailing time from ``port`` to every port."""
+        net, speed, costs = self.network, self.cruise(), self.lane_costs()
         return {
-            p: self.network.times_to(p, self.ocean, self.t, self.cruise(), known).get(
+            p: net.times_to(p, self.ocean, self.t, speed, known, costs).get(
                 port, math.inf
             )
-            for p in self.network.ports
+            for p in net.ports
         }
 
     def _regroup(self, port: str) -> None:
@@ -732,7 +775,12 @@ class World:
             if target is None:
                 continue
             to_target = self.network.times_to(
-                target, self.ocean, self.t, self.cruise(), pool.known_closed
+                target,
+                self.ocean,
+                self.t,
+                self.cruise(),
+                pool.known_closed,
+                self.lane_costs(),
             )
             v.loaded_here += len(
                 load(

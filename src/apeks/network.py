@@ -76,6 +76,13 @@ class SeaNetwork:
             total += step / ground
         return total
 
+    def lane_times(self, ocean: Ocean, t: float, speed: float) -> dict[str, float]:
+        """Transit estimate of every lane, to share across many ``times_to``."""
+        return {
+            lid: self.transit_estimate(lane, ocean, t, speed)
+            for lid, lane in self.lanes.items()
+        }
+
     def times_to(
         self,
         dest: str,
@@ -83,19 +90,23 @@ class SeaNetwork:
         t: float,
         speed: float,
         exclude: set[str] | None = None,
+        costs: dict[str, float] | None = None,
     ) -> dict[str, float]:
         """Estimated time from every node that can reach ``dest``."""
         skip = exclude or set()
+        cost_of = costs if costs is not None else self.lane_times(ocean, t, speed)
+        incoming: dict[str, list[Lane]] = {}
+        for lane in self.lanes.values():
+            if lane.id not in skip:
+                incoming.setdefault(lane.b, []).append(lane)
         best = {dest: 0.0}
         heap = [(0.0, dest)]
         while heap:
             cost, node = heapq.heappop(heap)
             if cost > best[node]:
                 continue
-            for lane in self.lanes.values():
-                if lane.b != node or lane.id in skip:
-                    continue
-                total = cost + self.transit_estimate(lane, ocean, t, speed)
+            for lane in incoming.get(node, []):
+                total = cost + cost_of[lane.id]
                 if total < best.get(lane.a, math.inf):
                     best[lane.a] = total
                     heapq.heappush(heap, (total, lane.a))

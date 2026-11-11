@@ -12,6 +12,7 @@ HOLD_WIDTH = 100.0  # lane width assumed while holding at a node or port
 
 # Ports
 BERTHS = 4  # berths per port, counted in ships
+SHIPS_PER_PORT = 3  # ships docked at each port at the start, empty
 SERVICE_TICKS = 40  # time a convoy spends mooring and casting off at a berth
 
 # Cargo

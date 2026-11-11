@@ -546,3 +546,18 @@ def test_convoy_stops_at_a_port_on_the_way_with_cargo_for_it() -> None:
             break
     assert world.metrics["latencies"] and world.convoys["a"].node == "M"
     assert world.convoys["b"].node == "Q" or world.convoys["b"].destination == "Q"
+
+
+def test_lane_costs_are_recomputed_only_when_the_drift_changes() -> None:
+    storm = Storm((50.0, 0.0), 40.0, 1.0, start=10, end=20)
+    world = make_world(line_net(), [("c", ("P", "Q"), 1)], ocean=Ocean(storms=(storm,)))
+    first = world.lane_costs()
+    assert first == world.network.lane_times(world.ocean, world.t, world.cruise())
+    world.t = 5
+    assert world.lane_costs() is first
+    world.t = 15
+    stormy = world.lane_costs()
+    assert stormy is not first
+    assert stormy == world.network.lane_times(world.ocean, 15, world.cruise())
+    world.ocean = Ocean(base=(0.1, 0.0))
+    assert world.lane_costs() is not stormy
