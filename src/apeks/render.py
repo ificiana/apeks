@@ -15,26 +15,27 @@ from apeks.geometry import Vec, add, normalize, scale
 from apeks.mapgen import Geography
 from apeks.world import World
 
-BG = (11, 17, 27)
-PANEL = (19, 27, 40)
-CARD = (27, 38, 55)
-RULE = (44, 58, 80)
-TEXT = (226, 232, 240)
-MUTED = (134, 150, 172)
-DEEP = (16, 42, 68)
-SHALLOW = (30, 72, 104)
-LAND = (58, 74, 52)
-COAST = (150, 136, 98)
-LANE = (98, 150, 196)
-CLOSED = (232, 72, 72)
-NODE = (150, 178, 206)
-PORT = (240, 228, 190)
-CURRENT = (70, 130, 170)
-STORM = (150, 90, 190)
-LADEN = (255, 178, 60)
-EMPTY = (120, 220, 230)
-GOOD, WARN, BAD = (92, 200, 120), (236, 190, 70), (232, 72, 72)
-SERIES = {"delivered": (92, 200, 120), "backlog": (236, 150, 70)}
+# Light theme.
+BG = (243, 245, 248)
+PANEL = (255, 255, 255)
+CARD = (236, 240, 245)
+RULE = (214, 220, 228)
+TEXT = (30, 38, 52)
+MUTED = (100, 112, 130)
+DEEP = (178, 210, 232)
+SHALLOW = (206, 228, 243)
+LAND = (228, 222, 200)
+COAST = (186, 166, 118)
+LANE = (52, 104, 168)
+CLOSED = (212, 48, 48)
+NODE = (88, 108, 138)
+PORT = (255, 255, 255)
+CURRENT = (40, 120, 190)
+STORM = (128, 70, 180)
+LADEN = (226, 120, 10)
+EMPTY = (10, 140, 160)
+GOOD, WARN, BAD = (30, 150, 80), (196, 128, 0), (212, 48, 48)
+SERIES = {"delivered": (30, 150, 80), "backlog": (220, 110, 30)}
 
 PANEL_W = 400
 CONTROLS_W = 330
