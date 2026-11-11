@@ -15,6 +15,7 @@ def test_specs_cover_run_map_llm_news_and_the_active_engines() -> None:
     assert "news.delay" in keys and "engine.aco.alpha" in keys
     assert "url" not in keys and keys["ollama_port"].kind == "int"
     assert keys["capacity"].kind == "int" and keys["capacity"].lo == 1
+    assert keys["effort"].options == ("", "low", "medium", "high", "xhigh", "max")
     assert "engine.boids.w_sep" in keys and "engine.scored.w_report" not in keys
     llm = by_key(ExperimentConfig(routing="llm", formation="llm"))
     assert "engine.scored.w_report" in llm and "engine.slot.shape" in llm

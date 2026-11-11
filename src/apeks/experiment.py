@@ -30,6 +30,7 @@ ROUTING = ("aco", "llm")
 FORMATION = ("boids", "llm")
 BACKENDS = ("stub", "ollama", "claude")
 MAPS = ("generated", "classic")
+EFFORTS = ("low", "medium", "high", "xhigh", "max")  # claude --effort; "" = default
 DEFAULT_MODELS = {"claude": "claude-haiku-5-5", "ollama": "lfm3"}
 """The model a backend starts with when chosen in the dashboard."""
 SWEPT = (("ports", "p"), ("adjacency", "k"), ("seed", "s"))
@@ -67,6 +68,7 @@ class ExperimentConfig:
     llm: str = "claude"
     model: str = "claude-haiku-5-5"
     ollama_port: int = 11434  # Ollama on localhost
+    effort: str = ""  # claude's thinking effort, one of EFFORTS; "" = CLI default
     latency: float = config.LLM_LATENCY
     budget: int = config.LLM_BUDGET
     news: NewsSettings = NewsSettings()
@@ -171,7 +173,7 @@ def make_client(cfg: ExperimentConfig) -> LlmClient:
     if cfg.llm == "ollama":
         return OllamaClient(model=cfg.model, url=f"http://localhost:{cfg.ollama_port}")
     if cfg.llm == "claude":
-        return ClaudeCodeClient(model=cfg.model)
+        return ClaudeCodeClient(model=cfg.model, effort=cfg.effort)
     return StubClient()
 
 

@@ -162,7 +162,7 @@ config:
 | `llm_formation.toml` | aco | llm |
 
 Other config keys: `map` (`generated` or `classic`), `ports` and `adjacency`
-(generated map only; defaults 5 and 3), `seed`, `ticks`, `demand` (scales `DEMAND_RATE`, default 1), `capacity` (packages per ship, default 4), `llm` (`claude` by default, `ollama`, `stub`, or `""` for arms without an LLM module), `model` (default `claude-haiku-5-5`), `ollama_port` (default 11434),
+(generated map only; defaults 5 and 3), `seed`, `ticks`, `demand` (scales `DEMAND_RATE`, default 1), `capacity` (packages per ship, default 4), `llm` (`claude` by default, `ollama`, `stub`, or `""` for arms without an LLM module), `model` (default `claude-haiku-5-5`), `ollama_port` (default 11434), `effort` (the `claude --effort` level: `low`, `medium`, `high`, `xhigh` or `max`; `""` by default leaves the CLI's own),
 `latency`, `budget`, the `[news]` table, and `[engine.<key>]` tables that set
 the starting policy of an engine (`aco`, `scored`, `boids` or `slot`), clamped
 to each field's bounds, for example `[engine.aco]` with `alpha = 2.0`.
@@ -294,8 +294,10 @@ uv run apeks-run experiments/llm.toml --llm claude --model claude-haiku-5-5
 ```
 
 Each call runs headless `claude -p` with the policy's JSON schema as
-`--json-schema`, no tools, no saved session and a short system prompt, from an
-empty temporary directory so no project instructions reach the model. It needs
+`--json-schema`, no tools, no saved session, no MCP servers, no settings files
+and a short system prompt, from an empty temporary directory so no project
+instructions reach the model and the CLI starts without loading plugins or
+connectors. `effort`, when set, is passed as `--effort`. It needs
 a logged-in `claude` CLI on `PATH`. Calls take a few seconds each.
 
 ## Layout

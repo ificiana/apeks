@@ -99,7 +99,8 @@ def test_sweep_arms_cover_seeds_0_to_49() -> None:
 def test_make_client_picks_backend() -> None:
     default = make_client(ExperimentConfig())
     assert isinstance(default, ClaudeCodeClient)
-    assert default.model == "claude-haiku-5-5"
+    assert default.model == "claude-haiku-5-5" and default.effort == ""
+    assert make_client(ExperimentConfig(effort="high")).effort == "high"
     assert isinstance(make_client(ExperimentConfig(llm="stub")), StubClient)
     client = make_client(ExperimentConfig(llm="ollama", model="m", ollama_port=1234))
     assert isinstance(client, OllamaClient) and client.url == "http://localhost:1234"

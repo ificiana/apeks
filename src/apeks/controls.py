@@ -12,6 +12,7 @@ from typing import Any
 from apeks.experiment import (
     BACKENDS,
     DEFAULT_MODELS,
+    EFFORTS,
     ENGINES,
     FORMATION,
     MAPS,
@@ -82,6 +83,7 @@ def specs(cfg: ExperimentConfig) -> list[Spec]:
         Spec("llm", "llm", "choice", options=("", *BACKENDS)),
         Spec("model", "llm", "text"),
         Spec("ollama_port", "llm", "int", 1, 65535),
+        Spec("effort", "llm", "choice", options=("", *EFFORTS)),
         Spec("latency", "llm", "float", 0.0, 1000.0, 5.0),
         Spec("budget", "llm", "int", 0, 1000),
     ]

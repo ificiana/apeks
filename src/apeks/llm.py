@@ -83,12 +83,16 @@ SYSTEM_PROMPT = "You write JSON policies for a fleet simulation. Reply only with
 class ClaudeCodeClient:
     """Headless Claude Code (``claude -p``) with schema-checked output, no tools.
 
-    Runs in an empty temporary directory so no project instructions leak in.
+    Runs in an empty temporary directory with no MCP servers and no settings
+    files, so no project instructions leak in and the CLI starts in about a
+    second instead of loading the user's plugins and connectors. ``effort`` is
+    the CLI's ``--effort`` level; empty leaves the CLI's default.
     """
 
     model: str
     timeout: float = 300.0
     command: str = "claude"
+    effort: str = ""
     usage: dict[str, float] = field(default_factory=_usage)
 
     def complete(self, prompt: str, schema: dict[str, Any]) -> str:
@@ -107,7 +111,14 @@ class ClaudeCodeClient:
             "--no-session-persistence",
             "--system-prompt",
             SYSTEM_PROMPT,
+            "--strict-mcp-config",
+            "--mcp-config",
+            json.dumps({"mcpServers": {}}),
+            "--setting-sources",
+            "",
         ]
+        if self.effort:
+            cmd += ["--effort", self.effort]
         with tempfile.TemporaryDirectory() as cwd:
             try:
                 done = subprocess.run(

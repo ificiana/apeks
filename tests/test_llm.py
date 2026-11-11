@@ -189,6 +189,10 @@ def test_claude_client_runs_headless_with_schema(monkeypatch) -> None:
     assert cmd[cmd.index("--model") + 1] == "claude-haiku-5-5"
     assert json.loads(cmd[cmd.index("--json-schema") + 1]) == {"type": "object"}
     assert cmd[cmd.index("--tools") + 1] == ""
+    assert "--strict-mcp-config" in cmd
+    assert json.loads(cmd[cmd.index("--mcp-config") + 1]) == {"mcpServers": {}}
+    assert cmd[cmd.index("--setting-sources") + 1] == ""
+    assert "--effort" not in cmd  # unset: the CLI's own default
     assert seen["kw"]["timeout"] == 9.0
     assert client.usage == {
         "input_tokens": 1105,
@@ -242,3 +246,11 @@ def test_tests_cannot_start_the_real_claude_cli() -> None:
     with pytest.raises(RuntimeError):
         subprocess.run(["claude", "-p", "hi"])
     assert subprocess.run(["true"]).returncode == 0
+
+
+def test_claude_client_passes_the_effort_level(monkeypatch) -> None:
+    seen: dict = {}
+    reply = {"structured_output": {"x": 1}}
+    monkeypatch.setattr(subprocess, "run", fake_run(json.dumps(reply), seen=seen))
+    ClaudeCodeClient(model="m", effort="low").complete("hi", {"type": "object"})
+    assert seen["cmd"][seen["cmd"].index("--effort") + 1] == "low"
