@@ -10,6 +10,7 @@ same. Storms, currents and lane closures are drawn from the seed and sit in
 the ocean; a closure never cuts the map in two.
 """
 
+import heapq
 import math
 import random
 from collections.abc import Iterable
@@ -244,48 +245,153 @@ def _spread(
     n: int,
     taken: list[tuple[int, int]],
 ) -> list[tuple[int, int]]:
-    """Pick ``n`` cells, each as far as possible from those already picked."""
+    """Pick ``n`` cells, each as far as possible from those already picked.
+
+    Farthest-point sampling; ties go to the earliest cell in ``cells``. Gaps
+    are squared integer distances, found through a bucket grid of the picked
+    cells, and a lazy max-heap re-checks only the cell on top.
+    """
     picked: list[tuple[int, int]] = []
     if not taken:
         picked.append(rng.choice(cells))
-    gap = {
-        c: min((math.dist(c, t) for t in taken + picked), default=0.0) for c in cells
-    }
+    near = _Nearest(taken + picked)
+    gaps = [near.gap(c) for c in cells]
+    heap = [(-g, i) for i, g in enumerate(gaps)]
+    heapq.heapify(heap)
+    seen = [near.count] * len(cells)
     while len(picked) < n:
-        best = max(cells, key=lambda c: gap[c])
-        picked.append(best)
-        for c in cells:
-            gap[c] = min(gap[c], math.dist(c, best))
+        _, i = heapq.heappop(heap)
+        if seen[i] < near.count:  # picks since this gap was found: refresh it
+            gaps[i] = near.gap_since(cells[i], gaps[i], seen[i])
+            seen[i] = near.count
+            heapq.heappush(heap, (-gaps[i], i))
+            continue
+        picked.append(cells[i])
+        near.add(cells[i])
+        seen[i] = near.count
+        heapq.heappush(heap, (0, i))
     return picked
+
+
+class _Nearest:
+    """Squared distance from a cell to the nearest of a growing set of cells."""
+
+    SIZE = 8  # cells per bucket side
+    FEW = 32  # new cells to compare one by one before using the buckets
+
+    def __init__(self, cells: list[tuple[int, int]]) -> None:
+        self.buckets: dict[tuple[int, int], list[tuple[int, int]]] = {}
+        self.count = 0
+        self.added: list[tuple[int, int]] = []
+        self.lo = self.hi = (0, 0)
+        for c in cells:
+            self.add(c)
+
+    def add(self, cell: tuple[int, int]) -> None:
+        key = (cell[0] // self.SIZE, cell[1] // self.SIZE)
+        if not self.count:
+            self.lo = self.hi = key
+        self.lo = (min(self.lo[0], key[0]), min(self.lo[1], key[1]))
+        self.hi = (max(self.hi[0], key[0]), max(self.hi[1], key[1]))
+        self.buckets.setdefault(key, []).append(cell)
+        self.added.append(cell)
+        self.count += 1
+
+    def gap_since(self, cell: tuple[int, int], gap: int, since: int) -> int:
+        """``gap`` lowered by the cells added after the first ``since``."""
+        if self.count - since > self.FEW:
+            return self.gap(cell)
+        x, y = cell
+        for cx, cy in self.added[since:]:
+            gap = min(gap, (cx - x) ** 2 + (cy - y) ** 2)
+        return gap
+
+    def gap(self, cell: tuple[int, int]) -> int:
+        """Squared distance to the nearest cell added; 0 when none are."""
+        bx, by = cell[0] // self.SIZE, cell[1] // self.SIZE
+        reach = max(
+            abs(bx - self.lo[0]),
+            abs(bx - self.hi[0]),
+            abs(by - self.lo[1]),
+            abs(by - self.hi[1]),
+        )
+        best = math.inf
+        for ring in range(reach + 1):
+            if best <= (ring - 1) * self.SIZE * (ring - 1) * self.SIZE:
+                break
+            for key in _ring(bx, by, ring):
+                for x, y in self.buckets.get(key, ()):
+                    d = (x - cell[0]) ** 2 + (y - cell[1]) ** 2
+                    if d < best:
+                        best = d
+        return 0 if best == math.inf else int(best)
+
+
+def _ring(x: int, y: int, r: int) -> list[tuple[int, int]]:
+    """Buckets at Chebyshev distance ``r`` from bucket ``(x, y)``."""
+    if r == 0:
+        return [(x, y)]
+    top = [(x + i, y - r) for i in range(-r, r + 1)]
+    bottom = [(x + i, y + r) for i in range(-r, r + 1)]
+    sides = [(x + s, y + j) for s in (-r, r) for j in range(-r + 1, r)]
+    return top + bottom + sides
 
 
 def _lanes(
     geo: Geography, nodes: dict[str, Vec], adjacency: int
 ) -> set[tuple[str, str]]:
+    """Each node's ``adjacency`` nearest nodes in sight, then the shortest
+    lanes in sight that join the parts, then bridges until connected.
+
+    Pairs are walked once in order of distance; line of sight is checked only
+    for pairs that could still be chosen.
+    """
     names = sorted(nodes)
-    sight = {
-        (a, b): math.dist(nodes[a], nodes[b])
+    pairs = sorted(
+        (math.dist(nodes[a], nodes[b]), (a, b))
         for i, a in enumerate(names)
         for b in names[i + 1 :]
-        if segment_clear(geo, nodes[a], nodes[b])
-    }
+    )
+    clear: dict[tuple[str, str], bool] = {}
+
+    def in_sight(pair: tuple[str, str]) -> bool:
+        if pair not in clear:
+            clear[pair] = segment_clear(geo, nodes[pair[0]], nodes[pair[1]])
+        return clear[pair]
+
     edges: set[tuple[str, str]] = set()
-    for a in names:
-        near = sorted((d, pair) for pair, d in sight.items() if a in pair)[:adjacency]
-        edges |= {pair for _, pair in near}
+    count = dict.fromkeys(names, 0)
+    open_nodes = len(names)
+    for _, (a, b) in pairs:
+        if not open_nodes:
+            break
+        want = [n for n in (a, b) if count[n] < adjacency]
+        if want and in_sight((a, b)):
+            edges.add((a, b))
+            for n in want:
+                count[n] += 1
+                open_nodes -= count[n] == adjacency
     group = {n: n for n in names}
 
     def root(n: str) -> str:
         while group[n] != n:
+            group[n] = group[group[n]]
             n = group[n]
         return n
 
+    parts = len(names)
     for a, b in edges:
-        group[root(a)] = root(b)
-    for _, (a, b) in sorted((d, pair) for pair, d in sight.items()):
-        if root(a) != root(b):
+        ra, rb = root(a), root(b)
+        if ra != rb:
+            group[ra] = rb
+            parts -= 1
+    for _, (a, b) in pairs:
+        if parts == 1:
+            break
+        if root(a) != root(b) and in_sight((a, b)):
             group[root(a)] = root(b)
             edges.add((a, b))
+            parts -= 1
     while not is_connected(nodes, edges):
         _bridge(geo, nodes, edges)
     return edges
@@ -307,8 +413,8 @@ def _bridge(geo: Geography, nodes: dict[str, Vec], edges: set[tuple[str, str]]) 
                 part |= {a, b}
                 grew = True
     a, b = min(
-        ((x, y) for x in part for y in names if y not in part),
-        key=lambda pair: math.dist(nodes[pair[0]], nodes[pair[1]]),
+        ((x, y) for x in sorted(part) for y in names if y not in part),
+        key=lambda pair: (math.dist(nodes[pair[0]], nodes[pair[1]]), pair),
     )
     path = _water_path(geo, nodes[a], nodes[b])
     here, i = a, 0
@@ -372,11 +478,9 @@ def _closures(
     events: list[Event] = []
     closed: set[tuple[str, str]] = set()
     for _ in range(count):
-        safe = [
-            e
-            for e in sorted(edges - closed)
-            if is_connected(nodes, edges - closed - {e})
-        ]
+        open_edges = edges - closed
+        cut = _bridges(nodes, open_edges)
+        safe = [e for e in sorted(open_edges) if e not in cut]
         if not safe:
             break
         a, b = rng.choice(safe)
@@ -386,3 +490,39 @@ def _closures(
         events.append(Event(at, "close", lane, f"lane {lane} blocked"))
         events.append(Event(at + EVENT_SPAN, "open", lane, f"lane {lane} reopened"))
     return sorted(events, key=lambda e: e.at)
+
+
+def _bridges(nodes: Iterable[str], edges: set[tuple[str, str]]) -> set[tuple[str, str]]:
+    """Edges whose removal disconnects their part of the graph (Tarjan)."""
+    neighbours: dict[str, list[tuple[str, tuple[str, str]]]] = {n: [] for n in nodes}
+    for e in edges:
+        neighbours[e[0]].append((e[1], e))
+        neighbours[e[1]].append((e[0], e))
+    order: dict[str, int] = {}
+    low: dict[str, int] = {}
+    found: set[tuple[str, str]] = set()
+    for start in neighbours:
+        if start in order:
+            continue
+        order[start] = low[start] = len(order)
+        stack = [(start, None, iter(neighbours[start]))]
+        while stack:
+            node, via, it = stack[-1]
+            step = next(it, None)
+            if step is None:
+                stack.pop()
+                if stack:
+                    parent = stack[-1][0]
+                    low[parent] = min(low[parent], low[node])
+                    if low[node] > order[parent]:
+                        found.add(via)
+                continue
+            other, e = step
+            if e == via:
+                continue
+            if other in order:
+                low[node] = min(low[node], order[other])
+            else:
+                order[other] = low[other] = len(order)
+                stack.append((other, e, iter(neighbours[other])))
+    return found

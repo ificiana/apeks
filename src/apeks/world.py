@@ -234,6 +234,9 @@ class World:
     tracer: Tracer | None = None
     geography: Geography | None = None
     _costs: tuple[Any, dict[str, float]] | None = None
+    _routes: dict[tuple[str, str, frozenset[str]], dict[str, float]] = field(
+        default_factory=dict
+    )
     timings: dict[str, float] = field(
         default_factory=lambda: dict.fromkeys(PHASES, 0.0)
     )
@@ -295,7 +298,31 @@ class World:
         if self._costs is None or self._costs[0] != key:
             costs = self.network.lane_times(self.ocean, self.t, self.cruise())
             self._costs = (key, costs)
+            self._routes = {}
         return self._costs[1]
+
+    def times_to(self, dest: str, known: set[str]) -> dict[str, float]:
+        """Charted time from every node to ``dest``, avoiding ``known`` closures."""
+        return self._route("to", dest, known)
+
+    def times_from(self, src: str, known: set[str]) -> dict[str, float]:
+        """Charted time from ``src`` to every node, avoiding ``known`` closures."""
+        return self._route("from", src, known)
+
+    def _route(self, way: str, node: str, known: set[str]) -> dict[str, float]:
+        costs = self.lane_costs()  # first, so a change clears the cache
+        key = (way, node, frozenset(known))
+        if key in self._routes:
+            return self._routes[key]
+        if way == "charted":
+            out = self.times_from(node, known)
+            self._routes[key] = {p: out.get(p, math.inf) for p in self.network.ports}
+        else:
+            search = self.network.times_to if way == "to" else self.network.times_from
+            self._routes[key] = search(
+                node, self.ocean, self.t, self.cruise(), known, costs
+            )
+        return self._routes[key]
 
     def situation(self, trigger: str) -> dict[str, Any]:
         """HQ's briefing: the chart, what ships reported via ports, the news."""
@@ -620,9 +647,7 @@ class World:
         net = self.network
         known = convoy.known_closed
         costs = self.lane_costs()
-        to_go = net.times_to(
-            str(convoy.destination), self.ocean, self.t, self.cruise(), known, costs
-        )
+        to_go = self.times_to(str(convoy.destination), known)
         options = tuple(
             RouteOption(
                 lane=lane.id,
@@ -700,8 +725,11 @@ class World:
         )
 
     def _ports(self) -> None:
+        at: dict[str, list[Convoy]] = {}
+        for c in self.convoys.values():
+            at.setdefault(c.node, []).append(c)
         for port, berths in self.network.ports.items():
-            here = [c for c in self.convoys.values() if c.node == port]
+            here = at.get(port, [])
             for convoy in here:
                 if convoy.state == "berthed" and self.t >= convoy.service_until:
                     self._unload(convoy, port)
@@ -749,13 +777,7 @@ class World:
 
     def _charted_times(self, port: str, known: set[str]) -> dict[str, float]:
         """Charted sailing time from ``port`` to every port."""
-        net, speed, costs = self.network, self.cruise(), self.lane_costs()
-        return {
-            p: net.times_to(p, self.ocean, self.t, speed, known, costs).get(
-                port, math.inf
-            )
-            for p in net.ports
-        }
+        return self._route("charted", port, known)
 
     def _regroup(self, port: str) -> None:
         """Docked ships load, pick a next port, and sail in convoys of the same."""
@@ -775,14 +797,7 @@ class World:
             target = target_port(v.cargo, self.waiting[port], times)
             if target is None:
                 continue
-            to_target = self.network.times_to(
-                target,
-                self.ocean,
-                self.t,
-                self.cruise(),
-                pool.known_closed,
-                self.lane_costs(),
-            )
+            to_target = self.times_to(target, pool.known_closed)
             v.loaded_here += len(
                 load(
                     v.cargo,

@@ -6,6 +6,7 @@ physics step applies ``drift``, which adds the wave oscillation on top.
 
 import math
 from dataclasses import dataclass
+from functools import cached_property
 
 from apeks.geometry import Vec, add, dist, normalize, perp, scale, sub
 
@@ -51,13 +52,47 @@ class Ocean:
     wave_period: float = 60.0
     wave_dir: Vec = (1.0, 0.0)
 
+    @cached_property
+    def _active(self) -> dict[float, tuple[Storm, ...]]:
+        """The storms active at the last time asked, keyed by that time."""
+        return {}
+
     def active_storms(self, t: float) -> tuple[Storm, ...]:
-        return tuple(s for s in self.storms if s.active(t))
+        cache = self._active
+        if t not in cache:
+            cache.clear()
+            cache[t] = tuple(s for s in self.storms if s.active(t))
+        return cache[t]
+
+    @cached_property
+    def _current_grid(self) -> tuple[float, dict[tuple[int, int], list[int]]]:
+        """Currents by grid cell, each listed in every cell its circle touches."""
+        size = max((c.radius for c in self.currents), default=1.0)
+        grid: dict[tuple[int, int], list[int]] = {}
+        for i, c in enumerate(self.currents):
+            x0, y0 = (
+                math.floor((c.centre[0] - c.radius) / size),
+                math.floor((c.centre[1] - c.radius) / size),
+            )
+            x1, y1 = (
+                math.floor((c.centre[0] + c.radius) / size),
+                math.floor((c.centre[1] + c.radius) / size),
+            )
+            for x in range(x0, x1 + 1):
+                for y in range(y0, y1 + 1):
+                    grid.setdefault((x, y), []).append(i)
+        return size, grid
 
     def mean_drift(self, pos: Vec, t: float) -> Vec:
+        """Base, plus currents in reach (in order), plus active storms.
+
+        Currents out of reach add exactly zero, so the grid only skips work.
+        """
         v = self.base
-        for c in self.currents:
-            v = add(v, c.at(pos))
+        size, grid = self._current_grid
+        cell = (math.floor(pos[0] / size), math.floor(pos[1] / size))
+        for i in grid.get(cell, ()):
+            v = add(v, self.currents[i].at(pos))
         for s in self.active_storms(t):
             v = add(v, s.at(pos))
         return v

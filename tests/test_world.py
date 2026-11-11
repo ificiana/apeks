@@ -1,3 +1,4 @@
+import math
 import random
 
 import pytest
@@ -571,3 +572,38 @@ def test_make_fleet_sets_ship_capacity() -> None:
 
     vessels, _ = make_fleet(scenario.network(), [("C1", "P1", 2, None)], capacity=9)
     assert [v.capacity for v in vessels.values()] == [9, 9]
+
+
+def test_route_times_are_cached_until_the_lane_costs_change() -> None:
+    storm = Storm((50.0, 0.0), 40.0, 1.0, start=10, end=20)
+    world = make_world(line_net(), [("c", ("P", "Q"), 1)], ocean=Ocean(storms=(storm,)))
+    net, costs = world.network, world.lane_costs()
+    to_q = world.times_to("Q", set())
+    assert to_q == net.times_to("Q", world.ocean, 0, world.cruise(), None, costs)
+    assert world.times_to("Q", set()) is to_q
+    assert world.times_to("Q", {"P>Q"}) is not to_q
+    from_p = world.times_from("P", set())
+    assert from_p == net.times_from("P", world.ocean, 0, world.cruise(), None, costs)
+    assert world.times_from("P", set()) is from_p
+    world.t = 15  # the storm changes the costs
+    assert world.times_to("Q", set()) is not to_q
+    assert world.times_from("P", set()) is not from_p
+
+
+def test_out_lanes_uses_the_index_and_skips_exclusions() -> None:
+    net = line_net()
+    assert [lane.id for lane in net.out_lanes("P")] == [
+        lane.id for lane in net.lanes.values() if lane.a == "P"
+    ]
+    assert net.out_lanes("P", {lane.id for lane in net.out_lanes("P")}) == []
+    assert net.out_lanes("nowhere") == []
+
+
+def test_charted_times_are_cached_and_list_every_port() -> None:
+    world = make_world(line_net(), [("c", ("P", "Q"), 1)])
+    charted = world._charted_times("P", set())
+    assert set(charted) == set(world.network.ports)
+    assert all(
+        charted[p] == world.times_from("P", set()).get(p, math.inf) for p in charted
+    )
+    assert world._charted_times("P", set()) is charted

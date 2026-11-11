@@ -119,3 +119,25 @@ def test_times_to_reuses_precomputed_lane_times() -> None:
     assert times["A"] == 100.0
     detour = net.times_to("B", Ocean(), 0.0, 2.0, {"W>B"}, costs=costs)
     assert detour["A"] == pytest.approx(math.hypot(100, 100))
+
+
+def test_times_from_matches_times_to_for_every_destination() -> None:
+    net = make_net()
+    net.add_node("Z", (500.0, 500.0))  # unreachable
+    ocean = Ocean(base=(0.3, 0.1))
+    costs = net.lane_times(ocean, 0.0, 2.0)
+    for skip in (None, {"W>B"}):
+        out = net.times_from("A", ocean, 0.0, 2.0, skip, costs)
+        for node in net.nodes:
+            back = net.times_to(node, ocean, 0.0, 2.0, skip, costs)
+            assert out.get(node, math.inf) == pytest.approx(back.get("A", math.inf))
+    assert "Z" not in net.times_from("A", ocean, 0.0, 2.0)
+
+
+def test_lane_index_is_rebuilt_when_a_channel_is_added() -> None:
+    net = make_net()
+    assert "Y" not in net.times_from("A", Ocean(), 0.0, 2.0)
+    net.add_node("Y", (300.0, 0.0))
+    net.add_channel("B", "Y", width=20.0, capacity=2)
+    assert "Y" in net.times_from("A", Ocean(), 0.0, 2.0)
+    assert "A" in net.times_to("Y", Ocean(), 0.0, 2.0)

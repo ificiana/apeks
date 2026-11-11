@@ -138,3 +138,153 @@ def test_rejects_too_few_ports_or_lanes() -> None:
         generate(1, 1, 3, 6000)
     with pytest.raises(ValueError):
         generate(1, 5, 0, 6000)
+
+
+def _spread_reference(rng, cells, n, taken):
+    """The plain farthest-point sampling ``_spread`` must reproduce exactly."""
+    import math
+
+    picked = []
+    if not taken:
+        picked.append(rng.choice(cells))
+    gap = {
+        c: min((math.dist(c, t) for t in taken + picked), default=0.0) for c in cells
+    }
+    while len(picked) < n:
+        best = max(cells, key=lambda c: gap[c])
+        picked.append(best)
+        for c in cells:
+            gap[c] = min(gap[c], math.dist(c, best))
+    return picked
+
+
+@pytest.mark.parametrize("seed", range(6))
+def test_spread_matches_plain_farthest_point_sampling(seed) -> None:
+    rng = random.Random(seed)
+    cols, rows = rng.randint(3, 60), rng.randint(3, 40)
+    cells = [(c, r) for r in range(rows) for c in range(cols) if rng.random() < 0.6]
+    n = min(len(cells), rng.randint(1, 25))
+    got = mapgen._spread(random.Random(seed), cells, n, [])
+    assert got == _spread_reference(random.Random(seed), cells, n, [])
+    taken = got[:3]
+    rest = [c for c in cells if c not in taken]
+    m = min(len(rest), 7)
+    assert mapgen._spread(rng, rest, m, taken) == _spread_reference(rng, rest, m, taken)
+
+
+def _lanes_reference(geo, nodes, adjacency):
+    """The all-pairs lane builder ``_lanes`` must reproduce exactly."""
+    import math
+
+    names = sorted(nodes)
+    sight = {
+        (a, b): math.dist(nodes[a], nodes[b])
+        for i, a in enumerate(names)
+        for b in names[i + 1 :]
+        if segment_clear(geo, nodes[a], nodes[b])
+    }
+    edges = set()
+    for a in names:
+        near = sorted((d, pair) for pair, d in sight.items() if a in pair)[:adjacency]
+        edges |= {pair for _, pair in near}
+    group = {n: n for n in names}
+
+    def root(n):
+        while group[n] != n:
+            n = group[n]
+        return n
+
+    for a, b in edges:
+        group[root(a)] = root(b)
+    for _, (a, b) in sorted((d, pair) for pair, d in sight.items()):
+        if root(a) != root(b):
+            group[root(a)] = root(b)
+            edges.add((a, b))
+    while not is_connected(nodes, edges):
+        mapgen._bridge(geo, nodes, edges)
+    return edges
+
+
+@pytest.mark.parametrize("seed", range(8))
+def test_lanes_match_the_all_pairs_builder(seed) -> None:
+    sea = generate(seed, 5 + seed * 3, 1 + seed % 4, 1000)
+    geo = sea.geography
+    nodes = sea.network.nodes
+    for k in (1, 2, 4):
+        assert mapgen._lanes(geo, nodes, k) == _lanes_reference(geo, nodes, k)
+
+
+def _closures_reference(rng, nodes, edges, count, ticks):
+    """The remove-and-recheck closure picker ``_closures`` must reproduce."""
+    events, closed = [], set()
+    for _ in range(count):
+        safe = [
+            e
+            for e in sorted(edges - closed)
+            if is_connected(nodes, edges - closed - {e})
+        ]
+        if not safe:
+            break
+        a, b = rng.choice(safe)
+        closed.add((a, b))
+        at = mapgen._start(rng, ticks)
+        lane = f"{a}>{b}"
+        events.append(mapgen.Event(at, "close", lane, f"lane {lane} blocked"))
+        events.append(
+            mapgen.Event(at + mapgen.EVENT_SPAN, "open", lane, f"lane {lane} reopened")
+        )
+    return sorted(events, key=lambda e: e.at)
+
+
+@pytest.mark.parametrize("seed", range(8))
+def test_closures_match_remove_and_recheck(seed) -> None:
+    sea = generate(seed, 5 + seed * 4, 1 + seed % 3, 3000)
+    nodes = sea.network.nodes
+    edges = {
+        tuple(lane.split(">"))
+        for lane in sea.network.lanes
+        if lane.split(">")[0] < lane.split(">")[1]
+    }
+    for count in (1, 3, 10, 40):
+        got = mapgen._closures(random.Random(seed), nodes, edges, count, 3000)
+        want = _closures_reference(random.Random(seed), nodes, edges, count, 3000)
+        assert got == want
+
+
+def test_bridges_finds_lanes_whose_loss_cuts_the_map() -> None:
+    nodes = dict.fromkeys("ABCDEF", (0.0, 0.0))
+    edges = {("A", "B"), ("B", "C"), ("A", "C"), ("C", "D"), ("D", "E"), ("E", "F")}
+    assert mapgen._bridges(nodes, edges) == {("C", "D"), ("D", "E"), ("E", "F")}
+    assert mapgen._bridges({"A": (0.0, 0.0)}, set()) == set()
+
+
+@pytest.mark.parametrize("seed", range(4))
+def test_spread_matches_reference_with_many_picks(seed) -> None:
+    rng = random.Random(seed)
+    cells = [(c, r) for r in range(70) for c in range(90) if rng.random() < 0.4]
+    got = mapgen._spread(random.Random(seed), cells, 150, [])
+    assert got == _spread_reference(random.Random(seed), cells, 150, [])
+
+
+def test_generation_does_not_depend_on_the_string_hash_seed() -> None:
+    # Bridges once broke distance ties by set order: 40 ports, seed 0 changed
+    # with PYTHONHASHSEED (1 differs from 0).
+    import os
+    import subprocess
+    import sys
+
+    code = (
+        "from apeks.mapgen import generate; s = generate(0, 40, 3, 6000); "
+        "print(sorted(s.network.nodes.items()), sorted(s.network.lanes), s.events)"
+    )
+    outs = {
+        subprocess.run(
+            [sys.executable, "-c", code],
+            env={**os.environ, "PYTHONHASHSEED": h},
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        for h in ("0", "1")
+    }
+    assert len(outs) == 1
