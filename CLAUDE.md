@@ -4,22 +4,25 @@ Guidance for Claude Code in this repository. The global rules apply: strict TDD,
 
 ## Project
 
-`apeks` is a pygame-ce simulation: agents walk a tile grid, leave decaying trail marks, seek charging stations when low, and push lower-priority agents aside. Python 3.14, managed with uv.
+`apeks` simulates autonomous cargo convoys on a directed sea-lane network to compare classical engines (ACO routing, Boids formation) with LLM-written policies. Python 3.14, managed with uv. See README.md for the story and arms.
 
 ## Commands
 
 - Setup: `uv sync`, then `git config core.hooksPath .githooks` (installs the pre-commit hook).
-- Run: `uv run apeks`
+- Window: `uv run apeks [experiments/<arm>.toml]`
+- Headless: `uv run apeks-run experiments/*.toml [--llm ollama] [--ticks N] [--logs DIR] [--no-trace] [--snapshot-every N]`; writes `logs/out_<arm>_<stamp>.json` and `logs/trace_<arm>_<stamp>.jsonl`
 - Tests with coverage gate: `uv run pytest` (branch coverage, fails under 100%)
 - Lint and format: `uv run ruff check .` and `uv run ruff format .`; keep formatter changes.
 
 ## Layout
 
 - `src/apeks/config.py`: constants only.
-- `src/apeks/sim.py`: pure simulation (`Trail`, `Agent`, `World`, `build_nav`, `advance`). No pygame calls.
+- Pure simulation, no pygame: `geometry`, `ocean`, `network`, `radio`, `policy`, `routing`, `formation`, `llm`, `world`, `scenario`, `experiment`, `runner`, `trace`.
+- Engines share one observation API per module; the word "pheromone" stays inside the ACO engine.
 - `src/apeks/render.py`: drawing onto a `pygame.Surface`.
-- `src/apeks/app.py`: `move_camera` and `main`, the window and event loop.
-- `tests/`: pytest; `conftest.py` seeds `random` and selects the SDL dummy video driver, so tests run offline and headless.
+- `src/apeks/app.py`: `parse_args`, `change_speed` and `main`, the window and event loop.
+- `experiments/`: one TOML config per arm.
+- `tests/`: pytest; `conftest.py` seeds `random` and selects the SDL dummy video driver, so tests run offline and headless. LLM calls use `StubClient` or a faked `urlopen`.
 
 ## Testing rules
 

@@ -1,28 +1,44 @@
-import apeks
-from apeks.app import move_camera
-from apeks.config import CAM_SPEED, WORLD_SIZE
+from pathlib import Path
 
-VIEW = (1280, 720)
+import pygame
 
+from apeks import scenario
+from apeks.app import SPEEDS, change_speed, parse_args
+from apeks.experiment import ExperimentConfig, build_world
+from apeks.render import draw, hud_lines
 
-def test_package_exports_main():
-    assert apeks.main is apeks.app.main
-
-
-def test_camera_pans_by_axis_and_speed():
-    assert move_camera(100, 100, 1, -1, 0.1, VIEW) == (
-        100 + CAM_SPEED * 0.1,
-        100 - CAM_SPEED * 0.1,
-    )
+ARMS = Path(__file__).parent.parent / "experiments"
 
 
-def test_camera_idle_without_input():
-    assert move_camera(100, 100, 0, 0, 0.5, VIEW) == (100, 100)
+def test_parse_args_defaults_and_loads_config() -> None:
+    assert parse_args([]) == ExperimentConfig()
+    assert parse_args([str(ARMS / "llm.toml")]).routing == "llm"
 
 
-def test_camera_clamped_to_world():
-    assert move_camera(5, 5, -1, -1, 1.0, VIEW) == (0, 0)
-    assert move_camera(WORLD_SIZE, WORLD_SIZE, 1, 1, 1.0, VIEW) == (
-        WORLD_SIZE - VIEW[0],
-        WORLD_SIZE - VIEW[1],
-    )
+def test_speed_steps_are_clamped() -> None:
+    assert change_speed(0, -1) == 0
+    assert change_speed(0, 1) == 1
+    assert change_speed(len(SPEEDS) - 1, 1) == len(SPEEDS) - 1
+
+
+def test_hud_shows_metrics_closures_and_llm_stats() -> None:
+    world = build_world(ExperimentConfig(routing="llm"))
+    world.step()
+    world.closed = {"W2>W3"}
+    lines = hud_lines(world, "llm")
+    assert lines[0] == "llm  t=1"
+    assert "closed W2>W3" in lines
+    assert any(line.startswith("llm routing: 1 calls") for line in lines)
+
+
+def test_draw_paints_storms_closures_and_vessels() -> None:
+    pygame.init()
+    surface = pygame.Surface((scenario.WIDTH, scenario.HEIGHT))
+    font = pygame.font.Font(None, 14)
+    world = build_world(ExperimentConfig())
+    world.t = 2000.0
+    world.closed = {"W2>W3"}
+    draw(surface, world, "classical", font)
+    vessel = world.vessels["A.0"].pos
+    assert surface.get_at((int(vessel[0]), int(vessel[1])))[:3] == (255, 170, 60)
+    pygame.quit()
