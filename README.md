@@ -2,8 +2,9 @@
 
 Autonomous cargo convoys on a sea-lane network, used to compare classical swarm
 intelligence (Ant Colony Optimisation for routing, Boids for formation) with
-policies written by a large language model. The project applies both and
-observes what happens; it makes no claim that either is better.
+policies written by a large language model. The project applies both under
+identical conditions and measures what happens. `docs/REPORT.md` is the full
+technical report; `reports/` holds the report for each sweep.
 
 ## Story
 
@@ -171,15 +172,16 @@ A list of seeds (`seed = [0, 1, 2]`) makes a sweep: one run per seed, named
 `<name>_s<seed>`. Lists of `ports` and `adjacency` expand the same way, into
 every combination, named `<name>_p<ports>_k<adjacency>_s<seed>` (only the
 keys given as lists appear in the name). `classical_scale.toml` sweeps ports
-and adjacency on one seed. Each arm has a `<arm>_sweep.toml` covering seeds 0–10.
+and adjacency on one seed. Each arm has a `<arm>_sweep.toml` holding the seed
+(and, for `classical` and `llm_routing`, port) lists of the latest report.
 `apeks-run` runs all runs in parallel, one process per CPU; `-j N` sets the
 number of processes.
 
 Sweeps are CPU-bound and parallel, so run them on a many-core machine when one
-is available: all 44 runs fit at once on 44 cores.
+is available: one run per core.
 
-Pitfall: a full trace is about 20 MB per 6000-tick run, so the four sweeps (44
-runs) write about 900 MB. Pass `--snapshot-every 10` to cut that to about a
+Pitfall: a full trace is about 20 MB per 6000-tick run on the five-port map,
+and grows with the fleet. Pass `--snapshot-every 10` to cut that to about a
 tenth, or `--no-trace` to skip traces.
 
 ## Metrics
@@ -229,7 +231,8 @@ The window is a dashboard in three columns and a status bar:
   `claude`, `lfm3` for `ollama`). Save writes the draft to `logs/dashboard/<name>_<stamp>.toml`, which
   `apeks` and `apeks-run` both read.
 - **Map** (middle): drag or WASD to pan, wheel or +/- to zoom, F to fit, and a
-  minimap of the whole sea.
+  minimap of the whole sea. Clicking a ship pauses the run and opens a
+  dialog with its cargo and next destinations.
 - **Figures** (right): the headline figures, delivered and backlog charts, a
   port table and the event log.
 
@@ -305,9 +308,9 @@ a logged-in `claude` CLI on `PATH`. Calls take a few seconds each.
 | Path | Contents |
 | --- | --- |
 | `src/apeks/seeds.py` | independent random streams derived from one seed |
-| `src/apeks/geometry.py` | 2-D vector helpers |
+| `src/apeks/geometry.py` | 2-D vector helpers; spatial hash grid for neighbour queries |
 | `src/apeks/ocean.py` | currents, storms, waves; mean and true drift |
-| `src/apeks/network.py` | ports, waypoints, directed lanes; transit estimates; Dijkstra time-to-go |
+| `src/apeks/network.py` | ports, waypoints, directed lanes; transit estimates; cached time-to-go by SciPy's Dijkstra |
 | `src/apeks/radio.py` | broadcast radio with range, loss, bandwidth and position noise; message types |
 | `src/apeks/cargo.py` | packages, port demand, loading, next-port and grouping rules |
 | `src/apeks/hazards.py` | a holder's beliefs about closed lanes |
@@ -326,6 +329,9 @@ a logged-in `claude` CLI on `PATH`. Calls take a few seconds each.
 | `src/apeks/controls.py` | editable config fields: specs, get, put, step, parse |
 | `src/apeks/render.py` | the dashboard: camera, history, layout, controls, input, drawing |
 | `src/apeks/app.py` | the session (live and draft config), stepper thread and event loop |
+| `experiments/` | one TOML config per arm, plus sweep and scaling configs |
+| `reports/` | one report per sweep (`1.md` … `9.md`) |
+| `docs/REPORT.md` | the full technical report |
 
 ## Development
 
