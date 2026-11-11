@@ -236,3 +236,9 @@ def test_claude_client_timeout_is_a_value_error(monkeypatch) -> None:
     monkeypatch.setattr(subprocess, "run", slow)
     with pytest.raises(ValueError, match="timed out"):
         ClaudeCodeClient(model="m").complete("p", {})
+
+
+def test_tests_cannot_start_the_real_claude_cli() -> None:
+    with pytest.raises(RuntimeError):
+        subprocess.run(["claude", "-p", "hi"])
+    assert subprocess.run(["true"]).returncode == 0

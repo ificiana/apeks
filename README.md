@@ -162,7 +162,7 @@ config:
 | `llm_formation.toml` | aco | llm |
 
 Other config keys: `map` (`generated` or `classic`), `ports` and `adjacency`
-(generated map only; defaults 5 and 3), `seed`, `ticks`, `demand` (scales `DEMAND_RATE`, default 1), `llm` (`stub`, `ollama`, `claude`, or `""` for arms without an LLM module), `model`, `url`,
+(generated map only; defaults 5 and 3), `seed`, `ticks`, `demand` (scales `DEMAND_RATE`, default 1), `capacity` (packages per ship, default 4), `llm` (`claude` by default, `ollama`, `stub`, or `""` for arms without an LLM module), `model` (default `claude-haiku-5-5`), `ollama_port` (default 11434),
 `latency`, `budget`, the `[news]` table, and `[engine.<key>]` tables that set
 the starting policy of an engine (`aco`, `scored`, `boids` or `slot`), clamped
 to each field's bounds, for example `[engine.aco]` with `alpha = 2.0`.
@@ -215,7 +215,7 @@ uv run apeks                                # window, classical arm
 uv run apeks experiments/llm.toml           # window, any arm
 uv run apeks-run experiments/*.toml         # headless, one JSON summary line per arm
 uv run apeks-run experiments/*.toml --llm stub   # offline, no LLM calls
-uv run apeks-run experiments/llm.toml --llm ollama --ticks 3500
+uv run apeks-run experiments/llm.toml --llm ollama --model lfm3 --ticks 3500
 ```
 
 The window is a dashboard in three columns and a status bar:
@@ -225,7 +225,8 @@ The window is a dashboard in three columns and a status bar:
   (run, map, modules, llm, news, and the parameters of the engines in use).
   `<` and `>` step a value or cycle a choice; click a value to type one, Enter
   to set it, Esc to cancel. Edits go to a draft, highlighted until applied.
-  Save writes the draft to `logs/dashboard/<name>_<stamp>.toml`, which
+  Choosing a backend sets its default model (`claude-haiku-5-5` for
+  `claude`, `lfm3` for `ollama`). Save writes the draft to `logs/dashboard/<name>_<stamp>.toml`, which
   `apeks` and `apeks-run` both read.
 - **Map** (middle): drag or WASD to pan, wheel or +/- to zoom, F to fit, and a
   minimap of the whole sea.
@@ -280,12 +281,11 @@ Two real backends:
 
 ```sh
 ollama pull lfm3      # or any model that supports structured output
-uv run apeks-run experiments/llm.toml --llm ollama
+uv run apeks-run experiments/llm.toml --llm ollama --model lfm3
 ```
 
-Calls go to `POST {url}/api/generate` with the policy's JSON schema as
-`format`, thinking off and temperature 0. Set `url` in a config to use a
-remote server.
+Calls go to `POST http://localhost:{ollama_port}/api/generate` with the
+policy's JSON schema as `format`, thinking off and temperature 0.
 
 #### Claude Code
 

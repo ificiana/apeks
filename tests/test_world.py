@@ -563,3 +563,11 @@ def test_lane_costs_are_recomputed_only_when_the_drift_changes() -> None:
     assert stormy == world.network.lane_times(world.ocean, 15, world.cruise())
     world.ocean = Ocean(base=(0.1, 0.0))
     assert world.lane_costs() is not stormy
+
+
+def test_make_fleet_sets_ship_capacity() -> None:
+    from apeks import scenario
+    from apeks.world import make_fleet
+
+    vessels, _ = make_fleet(scenario.network(), [("C1", "P1", 2, None)], capacity=9)
+    assert [v.capacity for v in vessels.values()] == [9, 9]

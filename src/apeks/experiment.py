@@ -30,6 +30,8 @@ ROUTING = ("aco", "llm")
 FORMATION = ("boids", "llm")
 BACKENDS = ("stub", "ollama", "claude")
 MAPS = ("generated", "classic")
+DEFAULT_MODELS = {"claude": "claude-haiku-5-5", "ollama": "lfm3"}
+"""The model a backend starts with when chosen in the dashboard."""
 SWEPT = (("ports", "p"), ("adjacency", "k"), ("seed", "s"))
 """Keys a TOML may give as lists, in name order, with their name suffix."""
 ENGINES: dict[str, type] = {
@@ -62,13 +64,14 @@ class ExperimentConfig:
     formation: str = "boids"
     seed: int = 0
     ticks: int = 6000
-    llm: str = "stub"
-    model: str = "lfm3"
-    url: str = "http://localhost:11434"
+    llm: str = "claude"
+    model: str = "claude-haiku-5-5"
+    ollama_port: int = 11434  # Ollama on localhost
     latency: float = config.LLM_LATENCY
     budget: int = config.LLM_BUDGET
     news: NewsSettings = NewsSettings()
     demand: float = 1.0
+    capacity: int = config.CAPACITY  # packages per ship
     map: str = "generated"
     ports: int = 5
     adjacency: int = 3
@@ -166,7 +169,7 @@ def load_config(path: Path) -> ExperimentConfig:
 
 def make_client(cfg: ExperimentConfig) -> LlmClient:
     if cfg.llm == "ollama":
-        return OllamaClient(model=cfg.model, url=cfg.url)
+        return OllamaClient(model=cfg.model, url=f"http://localhost:{cfg.ollama_port}")
     if cfg.llm == "claude":
         return ClaudeCodeClient(model=cfg.model)
     return StubClient()
@@ -189,7 +192,7 @@ def build_world(cfg: ExperimentConfig, client: LlmClient | None = None) -> World
         cfg.ticks,
     )
     fleet = [(f"{port}-start", port, n, None) for port, n in sea.fleet.items()]
-    vessels, convoys = make_fleet(net, fleet)
+    vessels, convoys = make_fleet(net, fleet, capacity=cfg.capacity)
     packages = generate_demand(
         sorted(net.ports), config.DEMAND_RATE * cfg.demand, cfg.seed, cfg.ticks
     )

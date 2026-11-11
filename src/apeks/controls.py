@@ -11,6 +11,7 @@ from typing import Any
 
 from apeks.experiment import (
     BACKENDS,
+    DEFAULT_MODELS,
     ENGINES,
     FORMATION,
     MAPS,
@@ -67,6 +68,7 @@ def specs(cfg: ExperimentConfig) -> list[Spec]:
         Spec("seed", "run", "int", 0, 10**9),
         Spec("ticks", "run", "int", 100, 100_000, 500),
         Spec("demand", "run", "float", 0.1, 5.0, 0.1),
+        Spec("capacity", "run", "int", 1, 50),
         Spec("map", "map", "choice", options=MAPS),
     ]
     if cfg.map == "generated":
@@ -79,7 +81,7 @@ def specs(cfg: ExperimentConfig) -> list[Spec]:
         Spec("formation", "modules", "choice", options=FORMATION),
         Spec("llm", "llm", "choice", options=("", *BACKENDS)),
         Spec("model", "llm", "text"),
-        Spec("url", "llm", "text"),
+        Spec("ollama_port", "llm", "int", 1, 65535),
         Spec("latency", "llm", "float", 0.0, 1000.0, 5.0),
         Spec("budget", "llm", "int", 0, 1000),
     ]
@@ -110,6 +112,8 @@ def put(cfg: ExperimentConfig, key: str, value: Any) -> ExperimentConfig:
     changes = {key: value}
     if key in ("routing", "formation") and value == "llm" and not cfg.llm:
         changes["llm"] = "stub"
+    if key == "llm" and value in DEFAULT_MODELS:
+        changes["model"] = DEFAULT_MODELS[value]
     return replace(cfg, **changes)
 
 

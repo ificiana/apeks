@@ -980,8 +980,11 @@ def make_fleet(
     network: SeaNetwork,
     specs: list[tuple[str, str, int, str | None]],
     spacing: float = 10.0,
+    capacity: int = config.CAPACITY,
 ) -> tuple[dict[str, Vessel], dict[str, Convoy]]:
     """Convoys ``(id, port, size, destination)`` at ``port``, in a row.
+
+    Each ship carries up to ``capacity`` packages.
 
     With no destination the convoy starts docked, waiting for cargo.
     """
@@ -991,7 +994,8 @@ def make_fleet(
         x, y = network.nodes[port]
         ids = [f"{cid}.{i}" for i in range(size)]
         for i, vid in enumerate(ids):
-            vessels[vid] = Vessel(vid, cid, (x + (i - (size - 1) / 2) * spacing, y))
+            pos = (x + (i - (size - 1) / 2) * spacing, y)
+            vessels[vid] = Vessel(vid, cid, pos, capacity=capacity)
         state = "docked" if dest is None else "sailing"
         convoys[cid] = Convoy(cid, ids, port, dest, state=state)
     return vessels, convoys

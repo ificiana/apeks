@@ -12,7 +12,7 @@ from apeks.experiment import (
     make_client,
 )
 from apeks.formation import BoidsFormation, SlotFormation
-from apeks.llm import OllamaClient, StubClient
+from apeks.llm import ClaudeCodeClient, OllamaClient, StubClient
 from apeks.routing import AcoRouting, ScoredRouting
 from apeks.trace import read_trace
 
@@ -97,9 +97,12 @@ def test_sweep_arms_cover_seeds_0_to_49() -> None:
 
 
 def test_make_client_picks_backend() -> None:
-    assert isinstance(make_client(ExperimentConfig()), StubClient)
-    client = make_client(ExperimentConfig(llm="ollama", model="m", url="http://h"))
-    assert isinstance(client, OllamaClient) and client.url == "http://h"
+    default = make_client(ExperimentConfig())
+    assert isinstance(default, ClaudeCodeClient)
+    assert default.model == "claude-haiku-5-5"
+    assert isinstance(make_client(ExperimentConfig(llm="stub")), StubClient)
+    client = make_client(ExperimentConfig(llm="ollama", model="m", ollama_port=1234))
+    assert isinstance(client, OllamaClient) and client.url == "http://localhost:1234"
 
 
 def test_run_returns_summary_and_llm_log() -> None:
@@ -296,3 +299,12 @@ def test_to_toml_round_trips_a_config(tmp_path: Path) -> None:
     back = load_config(path)
     assert back.engine == {"scored": {"avoid": ["A>B"], "w_report": 2.0}}
     assert back == cfg.__class__(**{**cfg.__dict__, "engine": back.engine})
+
+
+def test_ship_capacity_is_a_config_param(tmp_path: Path) -> None:
+    assert ExperimentConfig().capacity == config.CAPACITY
+    world = build_world(ExperimentConfig(map="classic", capacity=7))
+    assert {v.capacity for v in world.vessels.values()} == {7}
+    path = tmp_path / "c.toml"
+    path.write_text('name = "c"\ncapacity = 2\n')
+    assert load_config(path).capacity == 2

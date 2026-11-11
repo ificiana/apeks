@@ -13,6 +13,8 @@ def test_specs_cover_run_map_llm_news_and_the_active_engines() -> None:
     for k in ("seed", "ticks", "map", "ports", "adjacency", "demand", "routing"):
         assert k in keys
     assert "news.delay" in keys and "engine.aco.alpha" in keys
+    assert "url" not in keys and keys["ollama_port"].kind == "int"
+    assert keys["capacity"].kind == "int" and keys["capacity"].lo == 1
     assert "engine.boids.w_sep" in keys and "engine.scored.w_report" not in keys
     llm = by_key(ExperimentConfig(routing="llm", formation="llm"))
     assert "engine.scored.w_report" in llm and "engine.slot.shape" in llm
@@ -40,6 +42,15 @@ def test_put_keeps_the_config_valid_when_switching_to_llm() -> None:
     cfg = ExperimentConfig(llm="")
     assert put(cfg, "routing", "llm").llm == "stub"
     assert put(ExperimentConfig(llm="claude"), "routing", "llm").llm == "claude"
+
+
+def test_switching_backend_picks_its_default_model() -> None:
+    cfg = ExperimentConfig()
+    assert cfg.llm == "claude" and cfg.model == "claude-haiku-5-5"
+    ollama = put(cfg, "llm", "ollama")
+    assert ollama.model == "lfm3"
+    assert put(ollama, "llm", "claude").model == "claude-haiku-5-5"
+    assert put(put(cfg, "model", "x"), "llm", "stub").model == "x"
 
 
 def test_nudge_steps_numbers_within_bounds_and_cycles_choices() -> None:

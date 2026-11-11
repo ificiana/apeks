@@ -71,7 +71,7 @@ def test_layout_puts_the_map_left_panel_right_and_bar_below() -> None:
 
 
 def test_tiles_and_port_rows_summarise_the_world() -> None:
-    world = build_world(ExperimentConfig(map="classic", routing="llm"))
+    world = build_world(ExperimentConfig(map="classic", routing="llm", llm="stub"))
     world.step()
     world.closed = {"W2>W3"}
     t = dict(tiles(world))

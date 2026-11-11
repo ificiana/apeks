@@ -195,7 +195,8 @@ def test_session_reports_bad_edits_and_failed_builds(monkeypatch) -> None:
     s = _session()
     s.act(("commit", "seed", "abc"))
     assert s.draft == s.live and "seed" in s.ui.message
-    s.act(("nudge", "llm", -1))  # "" with no llm module: allowed
+    s.act(("commit", "llm", "(none)"))  # no llm module, so allowed
+    assert s.draft.llm == ""
     s.act(("nudge", "routing", 1))  # llm routing needs a backend: picks stub
     assert s.draft.routing == "llm" and s.draft.llm == "stub"
     s.act(("commit", "llm", "(none)"))
