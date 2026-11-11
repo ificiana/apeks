@@ -47,7 +47,7 @@ Ships carry packages, and packages decide where ships go. In report 3, each conv
 | `REGROUP_EVERY` | 10 | ticks between port regroupings |
 | `MAX_WAIT` | 100 | most ticks a docked ship waits before a partly full convoy sails |
 | `DETOUR_FRACTION` | 0.25 | most extra time, as a share of the direct leg, to call at a port on the way |
-| `DEMAND_RATE` | tuned | packages per tick per port at `demand = 1`; set so classical runs at about 70–80% of capacity |
+| `DEMAND_RATE` | 0.015 | packages per tick per port at `demand = 1`; classical runs at a load factor of about 0.74 over seeds 0–10 |
 
 ## Stages
 

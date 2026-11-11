@@ -11,6 +11,7 @@ Guidance for Claude Code in this repository. The global rules apply: strict TDD,
 - Setup: `uv sync`, then `git config core.hooksPath .githooks` (installs the pre-commit hook).
 - Window: `uv run apeks [experiments/<arm>.toml]`
 - Headless: `uv run apeks-run experiments/*.toml [--llm stub|ollama|claude] [--model M] [--ticks N] [--logs DIR] [--no-trace] [--snapshot-every N] [-j N]`; runs in parallel, one process per CPU by default; a `seed` list in a TOML expands to `<arm>_s<seed>` runs; writes `logs/out_<arm>_<stamp>.json` and `logs/trace_<arm>_<stamp>.jsonl`
+- Sweeps: run them on `ssh ai_server` (80 cores, repo at `~/dev/apeks`, `uv` and `claude` in `~/.local/bin`) when it is reachable; a full sweep is about 4× faster there than on the 8-core laptop. Make sure its checkout is at the commit under test, run with `export PATH=$HOME/.local/bin:$PATH`, then copy `logs/<run>` back. Fall back to running locally if the server is unreachable.
 - Tests with coverage gate: `uv run pytest` (branch coverage, fails under 100%)
 - Lint and format: `uv run ruff check .` and `uv run ruff format .`; keep formatter changes.
 

@@ -20,7 +20,7 @@ HANDLING_TIME = 5  # ticks per package loaded or unloaded
 REGROUP_EVERY = 10  # ticks between port regroupings
 MAX_WAIT = 100  # docked ticks before a partly full convoy sails
 DETOUR_FRACTION = 0.25  # most extra time, over the direct leg, to call on the way
-DEMAND_RATE = 0.01  # packages per tick per port at demand = 1
+DEMAND_RATE = 0.015  # packages per tick per port at demand = 1; classical load ≈ 0.74
 
 # Radio
 RADIO_RANGE = 260.0

@@ -158,6 +158,9 @@ A list of seeds (`seed = [0, 1, 2]`) makes a sweep: one run per seed, named
 `apeks-run` runs all runs in parallel, one process per CPU; `-j N` sets the
 number of processes.
 
+Sweeps are CPU-bound and parallel, so run them on a many-core machine when one
+is available: all 44 runs fit at once on 44 cores.
+
 Pitfall: a full trace is about 20 MB per 6000-tick run, so the four sweeps (44
 runs) write about 900 MB. Pass `--snapshot-every 10` to cut that to about a
 tenth, or `--no-trace` to skip traces.
