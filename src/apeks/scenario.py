@@ -1,4 +1,4 @@
-"""The default sea: five ports, sixteen ships, a strait, two currents, a storm."""
+"""The default sea: five ports, fifteen ships, a strait, two currents, a storm."""
 
 from apeks import config
 from apeks.network import SeaNetwork
@@ -13,11 +13,11 @@ STRAIT = "W2>W3"
 def network() -> SeaNetwork:
     net = SeaNetwork()
     for name, pos in {
-        "north": (150.0, 120.0),
-        "west": (80.0, 450.0),
-        "south": (450.0, 640.0),
-        "east": (920.0, 380.0),
-        "ne": (800.0, 90.0),
+        "P1": (150.0, 120.0),
+        "P2": (80.0, 450.0),
+        "P3": (450.0, 640.0),
+        "P4": (920.0, 380.0),
+        "P5": (800.0, 90.0),
     }.items():
         net.add_port(name, pos, berths=config.BERTHS)
     for name, pos in {
@@ -28,18 +28,18 @@ def network() -> SeaNetwork:
     }.items():
         net.add_node(name, pos)
     for a, b, width, capacity in [
-        ("north", "W1", 60.0, 2),
-        ("west", "W1", 60.0, 2),
+        ("P1", "W1", 60.0, 2),
+        ("P2", "W1", 60.0, 2),
         ("W1", "W2", 60.0, 2),
         ("W2", "W3", 14.0, 1),  # the strait: short but single file
-        ("W3", "ne", 50.0, 2),
-        ("W3", "east", 50.0, 2),
+        ("W3", "P5", 50.0, 2),
+        ("W3", "P4", 50.0, 2),
         ("W2", "W4", 60.0, 2),
-        ("W4", "east", 60.0, 2),
-        ("W4", "south", 60.0, 2),
-        ("W2", "south", 50.0, 2),
-        ("west", "south", 60.0, 2),
-        ("north", "ne", 50.0, 2),  # long northern route
+        ("W4", "P4", 60.0, 2),
+        ("W4", "P3", 60.0, 2),
+        ("W2", "P3", 50.0, 2),
+        ("P2", "P3", 60.0, 2),
+        ("P1", "P5", 50.0, 2),  # long northern route
     ]:
         net.add_channel(a, b, width, capacity)
     return net
@@ -65,5 +65,5 @@ def events() -> list[Event]:
     ]
 
 
-FLEET: dict[str, int] = {"north": 4, "west": 3, "south": 3, "east": 3, "ne": 3}
+FLEET: dict[str, int] = {"P1": 3, "P2": 3, "P3": 3, "P4": 3, "P5": 3}
 """Ships docked at each port at the start, empty."""

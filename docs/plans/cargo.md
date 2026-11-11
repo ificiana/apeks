@@ -27,7 +27,7 @@ Ships carry packages, and packages decide where ships go. In report 3, each conv
 | 17 | Knowledge (hazards, lane reports, backlogs, policies) is held by a convoy and carried by its ships. When convoys merge at a port, the new convoy takes the union of their hazards, reports and backlogs, plus the newest policy version any member holds. A ship that moves to a newer policy this way counts as having adopted it. |
 | 18 | A convoy that meets a closure mid-leg reroutes to the same port. It never splits or changes destination away from a port. |
 | 19 | Backlog changes never trigger an LLM call. They only appear in the prompt. |
-| 20 | The fleet keeps r3's 16 ships: 4 at north, and 3 at each other port. |
+| 20 | The fleet has 15 ships, 3 at each port. |
 
 ## Model details
 

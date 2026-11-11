@@ -27,12 +27,12 @@ def test_scenario_has_strait_and_every_port_reaches_every_other() -> None:
         for b in net.ports:
             assert net.times_to(b, ocean, 0.0, 1.8)[a] < float("inf")
     assert [e.kind for e in scenario.events()] == ["close", "open"]
-    assert sum(scenario.FLEET.values()) == 16 and set(scenario.FLEET) == set(net.ports)
+    assert sum(scenario.FLEET.values()) == 15 and set(scenario.FLEET) == set(net.ports)
 
 
 def test_world_starts_docked_with_seeded_demand(tmp_path: Path) -> None:
     world = build_world(ExperimentConfig(seed=3))
-    assert len(world.vessels) == 16
+    assert len(world.vessels) == 15
     assert {c.state for c in world.convoys.values()} == {"docked"}
     assert world.packages == build_world(ExperimentConfig(seed=3)).packages
     assert world.packages != build_world(ExperimentConfig(seed=4)).packages
@@ -59,7 +59,7 @@ def test_build_world_plugs_engines_per_module(
     assert isinstance(world.routing, types[0])
     assert isinstance(world.formation, types[1])
     assert sorted(world.authors) == authors
-    assert len(world.vessels) == 16
+    assert len(world.vessels) == 15
 
 
 def test_config_validation_and_loading(tmp_path: Path) -> None:

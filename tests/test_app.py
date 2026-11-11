@@ -39,6 +39,6 @@ def test_draw_paints_storms_closures_and_vessels() -> None:
     world.t = 2000.0
     world.closed = {"W2>W3"}
     draw(surface, world, "classical", font)
-    vessel = world.vessels["east-start.0"].pos
+    vessel = world.vessels["P1-start.0"].pos
     assert surface.get_at((int(vessel[0]), int(vessel[1])))[:3] == (255, 170, 60)
     pygame.quit()

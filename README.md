@@ -61,7 +61,7 @@ same fixed rules (`cargo.py`) for what ships do with it:
   newest policy version; a ship that moves to a newer policy this way counts
   as adopting it.
 
-All 16 ships start empty and docked: 4 at north, 3 at each other port.
+All 15 ships start empty and docked, 3 at each port.
 Routing (ACO or LLM) picks lanes and formation (Boids or LLM) keeps shape
 between ports; neither chooses destinations.
 
