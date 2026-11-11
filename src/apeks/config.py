@@ -23,3 +23,12 @@ NOTICE_EVERY = 20  # ticks between port stations repeating navigation notices
 # LLM policy authors
 LLM_LATENCY = 20.0  # sim ticks before a requested policy takes effect
 LLM_BUDGET = 20  # maximum policy requests per author per run
+
+# Information paths
+REPORT_NOISE = 0.1  # sd of lane-report error, as a share of the true transit
+RELAY_HOPS = 3  # ship-to-ship relays a hazard or policy may take
+RELAY_MAX_AGE = 300.0  # hazards older than this are not relayed
+NOTICE_MAX_AGE = 600.0  # port stations stop repeating a reopening after this
+UPLINK_DELAY = 30.0  # port station <-> HQ over land, each way
+REPORT_WINDOW = 800.0  # lane reports younger than this count in HQ's briefing
+NEWS_KEEP = 10  # newest news items shown to HQ's policy authors

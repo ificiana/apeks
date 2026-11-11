@@ -178,3 +178,22 @@ def test_empty_backend_allowed_only_without_llm_modules() -> None:
     assert world.authors == {}
     with pytest.raises(ValueError, match="needs an llm backend"):
         ExperimentConfig(routing="llm", llm="")
+
+
+def test_news_table_configures_the_feed(tmp_path: Path) -> None:
+    from apeks.news import NewsSettings
+
+    good = tmp_path / "news.toml"
+    good.write_text(
+        'name = "n"\nticks = 5000\n[news]\nmiss_rate = 1.0\nfalse_alarm_rate = 0.0\n'
+    )
+    cfg = load_config(good)
+    assert cfg.news == NewsSettings(miss_rate=1.0, false_alarm_rate=0.0)
+    assert build_world(cfg).news == []
+    feed = build_world(ExperimentConfig(seed=1)).news
+    assert feed == build_world(ExperimentConfig(seed=1)).news
+    assert len([i for i in feed if i.truth]) == 4
+    bad = tmp_path / "bad.toml"
+    bad.write_text("[news]\nloudness = 2\n")
+    with pytest.raises(ValueError, match="loudness"):
+        load_config(bad)

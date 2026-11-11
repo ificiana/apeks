@@ -4,10 +4,12 @@ import pytest
 
 from apeks import config
 from apeks.formation import BoidsFormation, BoidsParams
+from apeks.hq import Hq
 from apeks.llm import PolicyAuthor, StubClient
 from apeks.network import SeaNetwork
+from apeks.news import NewsItem
 from apeks.ocean import Ocean, Storm
-from apeks.radio import LaneReport, Notice, Radio
+from apeks.radio import Hazard, LaneReport, PolicyMsg, Radio
 from apeks.routing import Report, ScoredRouteParams, ScoredRouting
 from apeks.world import Convoy, Event, Vessel, World, make_fleet, reverse
 
@@ -32,9 +34,20 @@ def detour_net() -> SeaNetwork:
     return net
 
 
-def make_world(net, specs, *, ocean=None, loss=0.0, events=(), authors=None) -> World:
+def make_world(
+    net,
+    specs,
+    *,
+    ocean=None,
+    loss=0.0,
+    events=(),
+    authors=None,
+    news=(),
+    delay=0.0,
+    range_=500.0,
+) -> World:
     vessels, convoys = make_fleet(net, specs)
-    return World(
+    world = World(
         network=net,
         ocean=ocean or Ocean(),
         radio=radio(loss),
@@ -44,7 +57,11 @@ def make_world(net, specs, *, ocean=None, loss=0.0, events=(), authors=None) -> 
         formation=BoidsFormation(BoidsParams()),
         events=list(events),
         authors=authors or {},
+        news=list(news),
+        hq=Hq(delay),
     )
+    world.radio.range = range_
+    return world
 
 
 def run(world: World, ticks: int) -> None:
@@ -63,15 +80,24 @@ def test_vessel_thrust_is_acceleration_limited_and_drift_is_free() -> None:
     assert drifting.vel == (1.0, 0.0) and drifting.energy == 0.0
 
 
-def test_convoy_hears_notices_and_dedupes_reports() -> None:
+def test_convoy_hears_hazards_policies_and_dedupes_reports() -> None:
     c = Convoy("c", ["c.0"], ("P", "Q"), node="P")
-    c.hear(Notice("P", "P>Q", True, "closed"))
-    assert c.known_closed == {"P>Q"}
-    c.hear(Notice("P", "P>Q", False, "open"))
-    assert c.known_closed == set()
+    closed = Hazard("x.0", "P>Q", True, 10.0, "x")
+    assert c.hear(closed, 10.0) == "changed"
+    assert c.known_closed == {"P>Q", "Q>P"}
+    assert c.outbox == [Hazard("c.0", "P>Q", True, 10.0, "x", hops=1)]
+    assert c.hear(closed, 11.0) is None
+    assert c.hear(Hazard("x.0", "P>Q", False, 20.0, "y"), 20.0 + 1000) == "changed"
+    assert c.known_closed == set() and len(c.outbox) == 1
+    assert c.hear(Hazard("x.0", "P>Q", True, 30.0, "x", hops=3), 30.0) == "changed"
+    assert len(c.outbox) == 1
+    policy = PolicyMsg("port:P", "routing", 2, "params")
+    assert c.hear(policy, 0.0) == "adopted"
+    assert c.policies["routing"] == (2, "params")
+    assert c.hear(PolicyMsg("port:P", "routing", 1, "old"), 0.0) is None
     report = LaneReport("x.0", "P>Q", 50.0, 10.0)
-    c.hear(report)
-    c.hear(report)
+    assert c.hear(report, 0.0) is None
+    c.hear(report, 0.0)
     assert c.reports == {"P>Q": [Report(50.0, 10.0)]}
     assert c.destination == "Q"
 
@@ -102,39 +128,93 @@ def test_convoy_sails_delivers_and_shares_a_lane_report() -> None:
     assert s["llm"] == {}
 
 
-def test_blocked_lane_is_discovered_when_no_notice_arrives() -> None:
+def test_convoy_sees_a_closure_where_it_stands_and_tells_others() -> None:
     closing = [Event(0.0, "close", "P>Q", "grounded vessel")]
-    world = make_world(detour_net(), [("c", ("P", "Q"), 1)], loss=1.0, events=closing)
-    world.step()
-    assert world.closed == {"P>Q", "Q>P"}
-    assert world.metrics["blocked_discoveries"] == 1
-    assert world.convoys["c"].lane is None
-    world.step()
-    assert world.convoys["c"].lane == "P>M"
-    assert "t=0 grounded vessel" in world.log
-
-
-def test_port_notices_announce_closure_and_reopening() -> None:
-    events = [
-        Event(0.0, "close", "P>Q", "closed"),
-        Event(5.0, "open", "P>Q", "reopened"),
-    ]
-    world = make_world(detour_net(), [("c", ("P", "Q"), 1)], events=events)
+    world = make_world(detour_net(), [("c", ("P", "Q"), 1)], events=closing)
     world.step()
     c = world.convoys["c"]
-    assert {"P>Q", "Q>P"} <= c.known_closed
+    assert world.closed == {"P>Q", "Q>P"} and c.known_closed == {"P>Q", "Q>P"}
+    assert world.metrics["blocked_discoveries"] == 1
     assert c.lane == "P>M"
-    assert world.metrics["blocked_discoveries"] == 0
+    assert world.radio.by_type["Hazard"] == 1
+    assert "t=0 grounded vessel" in world.log
+    world.step()
+    assert world.stations["P"].hazards.closed() == {"P>Q", "Q>P"}
+    assert world.metrics["blocked_discoveries"] == 1
+
+
+def test_nobody_knows_a_closure_nobody_has_seen() -> None:
+    closing = [Event(0.0, "close", "M>Q", "x")]
+    world = make_world(detour_net(), [("c", ("P", "Q"), 1)], events=closing)
+    run(world, 3)
+    assert world.convoys["c"].known_closed == set()
+    assert world.stations["P"].hazards.closed() == set()
+    assert world.metrics["belief_missed"] == 6
+    assert world.metrics["hq_belief_missed"] == 6
+
+
+def test_closure_spreads_by_port_station_and_reaches_hq() -> None:
+    net = detour_net()
+    net.add_port("R", (400.0, 0.0), berths=1)
+    net.add_channel("Q", "R", width=40.0, capacity=1)
+    closing = [Event(0.0, "close", "P>Q", "x")]
+    world = make_world(
+        net,
+        [("a", ("P", "Q"), 1), ("b", ("R", "Q"), 1)],
+        events=closing,
+        delay=5.0,
+        range_=250.0,
+    )
+    world.step()
+    world.step()
+    assert world.convoys["b"].known_closed == set()
+    assert world.stations["Q"].hazards.closed() == {"P>Q", "Q>P"}
+    run(world, config.NOTICE_EVERY - 1)
+    assert world.convoys["b"].known_closed == {"P>Q", "Q>P"}
+    assert world.hq.hazards.closed() == {"P>Q", "Q>P"}
+    assert world.hq.hazards.entries["P>Q"].sources == {"a"}
+
+
+def test_reopening_is_seen_spread_and_then_no_longer_repeated() -> None:
+    events = [Event(0.0, "close", "P>Q", "x"), Event(2.0, "open", "P>Q", "y")]
+    world = make_world(
+        detour_net(), [("c", ("P", "Q"), 1), ("d", ("Q", "P"), 1)], events=events
+    )
+    world.convoys["c"].state = "berthed"
+    world.convoys["c"].service_until = 1e9
+    world.step()
+    world.step()
+    assert world.convoys["c"].known_closed == {"P>Q", "Q>P"}
+    world.convoys["c"].state = "sailing"
+    run(world, 2)
+    assert world.convoys["c"].known_closed == set()
+    assert world.convoys["c"].lane == "P>Q"
     run(world, config.NOTICE_EVERY)
-    assert world.reopened == {"P>Q", "Q>P"} and world.closed == set()
-    assert c.known_closed == set()
+    station = world.stations["P"]
+    assert station.hazards.closed() == set()
+    assert station.hazards.fresh(world.t, config.NOTICE_MAX_AGE)
+    assert not station.hazards.fresh(world.t + 1e4, config.NOTICE_MAX_AGE)
 
 
 def test_convoy_with_no_open_lane_holds() -> None:
     world = make_world(line_net(), [("c", ("P", "Q"), 1)])
-    world.convoys["c"].known_closed.add("P>Q")
+    world.convoys["c"].hazards.update("P>Q", True, 0.0, "x")
     world.step()
     assert world.convoys["c"].lane is None
+
+
+def test_lane_reports_are_noisy_on_air_but_exact_for_the_sender() -> None:
+    world = make_world(
+        line_net(), [("a", ("P", "Q"), 1), ("b", ("P", "Q", "P"), 1)], delay=0.0
+    )
+    world.convoys["b"].state = "berthed"
+    world.convoys["b"].service_until = 1e9
+    run(world, 200)
+    own = world.convoys["a"].reports["P>Q"][0]
+    heard = world.convoys["b"].reports["P>Q"][0]
+    assert own.finished_at == heard.finished_at
+    assert own.transit != heard.transit
+    assert world.hq.reports["P>Q"][0].transit == heard.transit
 
 
 def test_single_berth_makes_second_convoy_wait() -> None:
@@ -168,56 +248,113 @@ def test_near_miss_counts_once_per_encounter() -> None:
     assert world.metrics["near_misses"] == 1
 
 
-def test_llm_author_rewrites_policy_on_triggers_after_latency() -> None:
+def test_hq_writes_policy_on_news_and_ports_hand_it_to_convoys() -> None:
     stub = StubClient(['{"avoid": ["P>Q"]}'] * 3)
     author = PolicyAuthor("routing", "Pick lanes.", ScoredRouteParams, stub, 5, 2.0)
-    ocean = Ocean(storms=(Storm((500.0, 500.0), 10.0, 1.0, 1.0, 3.0),))
+    news = [
+        NewsItem(3.0, "Wire", "Gale near Q.", "storm"),
+        NewsItem(3.0, "Radio", "Rumour.", None),
+        NewsItem(1e9, "Wire", "Never read.", None),
+    ]
     world = make_world(
-        line_net(), [("c", ("P", "Q"), 1)], ocean=ocean, authors={"routing": author}
+        line_net(),
+        [("c", ("P", "Q"), 1), ("d", ("Q", "P"), 1)],
+        authors={"routing": author},
+        news=news,
+        delay=1.0,
+    )
+    run(world, 2 * config.NOTICE_EVERY + 1)
+    assert author.calls == 2
+    assert '"mission start"' not in stub.prompts[0]
+    assert "Trigger: mission start" in stub.prompts[0]
+    assert "Trigger: news: Gale near Q.; news: Rumour." in stub.prompts[1]
+    assert "[t=3, 0 ticks ago, Wire] Gale near Q." in stub.prompts[1]
+    assert world.policies["routing"][0] == 2
+    assert world.convoys["c"].policies["routing"][1].avoid == ("P>Q",)
+    assert world.routing.params.avoid == ()
+    assert any("new routing policy v1" in line for line in world.log)
+    s = world.summary()
+    assert s["llm"]["routing"]["calls"] == 2
+    assert s["llm"]["routing"]["input_tokens"] == 0
+    first = s["policies"][0]
+    assert first["module"] == "routing" and first["version"] == 1
+    assert first["adopted_by"] == 0 and first["to_all"] is None
+    second = s["policies"][1]
+    assert second["adopted_by"] == 2 and second["to_all"] == second["to_half"]
+    assert world.radio.stats["relayed"] > 0
+
+
+def test_fleet_report_reaching_hq_triggers_a_new_policy() -> None:
+    stub = StubClient()
+    author = PolicyAuthor("formation", "Keep shape.", BoidsParams, stub, 5, 0.0)
+    closing = [Event(0.0, "close", "P>Q", "x")]
+    world = make_world(
+        detour_net(),
+        [("c", ("P", "Q"), 1)],
+        authors={"formation": author},
+        events=closing,
+        delay=2.0,
     )
     run(world, 4)
-    assert world.routing.params.avoid == ("P>Q",)
-    assert author.calls == 3
-    assert any("new routing policy" in line for line in world.log)
-    assert any("storm forming" in line for line in world.log)
-    assert any("cleared" in line for line in world.log)
-    assert '"trigger": "mission start"' in stub.prompts[0]
-    assert world.summary()["llm"]["routing"] == {
-        "calls": 3,
-        "failures": 0,
-        "skipped": 0,
-    }
+    assert author.calls == 2
+    assert "Trigger: fleet report: P>Q closed" in stub.prompts[1]
+    assert world.convoys["c"].policies["formation"][0] == 0
 
 
-def test_formation_author_targets_formation_engine() -> None:
-    stub = StubClient(['{"w_sep": 4}'])
-    author = PolicyAuthor("formation", "Keep shape.", BoidsParams, stub, 5, 0.0)
-    world = make_world(
-        line_net(), [("c", ("P", "Q"), 1)], authors={"formation": author}
-    )
+def test_station_ignores_beacons_and_policies() -> None:
+    world = make_world(line_net(), [("c", ("P", "Q"), 1)])
+    world.convoys["c"].outbox.append(PolicyMsg("c.0", "routing", 1, None, hops=1))
     world.step()
-    assert world.formation.params.w_sep == 4.0
+    assert world.stations["P"].policies == {}
+    assert world.hq._inbox == []
 
 
-def test_situation_reports_storms_closures_and_delays() -> None:
-    ocean = Ocean(storms=(Storm((50.0, 50.0), 20.0, 1.0, 0.0, 9.0),))
-    world = make_world(line_net(), [("c", ("P", "Q"), 1)], ocean=ocean)
+def test_situation_is_built_from_what_reached_hq() -> None:
+    world = make_world(line_net(), [("c", ("P", "Q"), 1)])
     world.closed = {"P>Q"}
-    world.convoys["c"].reports = {
-        "P>Q": [Report(500.0, 0.0)],
-        "Q>P": [Report(9.0, -900.0)],
-    }
+    world.convoys["c"].reports = {"P>Q": [Report(500.0, 0.0)]}
+    world.hq.hazards.update("Q>P", True, 0.0, "c")
+    world.hq.reports = {"P>Q": [Report(500.0, 0.0)], "Q>P": [Report(9.0, -900.0)]}
+    world.hq.news = [NewsItem(0.0, "Wire", "Hello.", "x")]
+    world.t = 10.0
     s = world.situation("storm")
-    assert s["trigger"] == "storm" and s["closed_lanes"] == ["P>Q"]
-    assert s["storms"] == [{"centre": (50.0, 50.0), "radius": 20.0, "until": 9.0}]
-    assert s["reported_delay_by_lane"]["P>Q"] > 0
-    assert "Q>P" not in s["reported_delay_by_lane"]
-    assert s["lanes"]["P>Q"] == {"width": 40.0, "capacity": 1}
+    assert s["trigger"] == "storm"
+    assert s["fleet_reports"]["hazards"] == [
+        {"lane": "Q>P", "state": "closed", "age": 10, "confirmations": 1}
+    ]
+    assert s["fleet_reports"]["reported_delay_by_lane"]["P>Q"] > 0
+    assert "Q>P" not in s["fleet_reports"]["reported_delay_by_lane"]
+    assert s["map"]["lanes"]["P>Q"] == {"width": 40.0, "capacity": 1}
+    assert s["map"]["ports"] == ["P", "Q"]
+    assert s["news"] == [
+        {"published": 0.0, "age": 10, "source": "Wire", "text": "Hello."}
+    ]
+    assert "truth" not in str(s)
 
 
 def test_summary_without_trips_has_no_mean() -> None:
     world = make_world(line_net(), [("c", ("P", "Q"), 1)])
-    assert world.summary()["mean_trip_time"] is None
+    s = world.summary()
+    assert s["mean_trip_time"] is None and s["energy_per_delivery"] is None
+    assert s["beliefs"]["belief_false"] == 0
+
+
+def test_summary_energy_per_delivery() -> None:
+    world = make_world(line_net(), [("c", ("P", "Q"), 2)])
+    run(world, 400)
+    s = world.summary()
+    assert s["energy_per_delivery"] == round(s["energy"] / s["deliveries"], 1)
+    assert s["radio"]["by_type"]["PositionReport"] > 0
+
+
+def test_false_belief_is_counted() -> None:
+    world = make_world(line_net(), [("c", ("P", "Q"), 1)])
+    world.convoys["c"].hazards.update("Q>P", True, 0.0, "x")
+    world.hq.hazards.update("Q>P", True, 0.0, "x")
+    world.convoys["c"].state = "queued"
+    world.step()
+    assert world.metrics["belief_false"] == 1
+    assert world.metrics["hq_belief_false"] == 1
 
 
 def test_tracer_records_decisions_events_and_snapshots() -> None:
@@ -238,6 +375,7 @@ def test_tracer_records_decisions_events_and_snapshots() -> None:
         [("a", ("P", "Q"), 2), ("b", ("P", "Q"), 1)],
         events=events,
         authors={"routing": author},
+        news=[NewsItem(5.0, "Wire", "Strait closed.", "close")],
     )
     world.tracer = Tracer(buf, snapshot_every=10)
     run(world, 400)
@@ -246,8 +384,11 @@ def test_tracer_records_decisions_events_and_snapshots() -> None:
     assert {
         "event",
         "policy_request",
-        "policy_applied",
-        "notice_heard",
+        "hazard_seen",
+        "hazard_heard",
+        "news",
+        "policy_decided",
+        "policy_at_ports",
         "route_choice",
         "lane_start",
         "lane_end",
@@ -260,7 +401,8 @@ def test_tracer_records_decisions_events_and_snapshots() -> None:
     snaps = [r for r in records if r["kind"] == "snapshot"]
     assert [s["t"] for s in snaps[:2]] == [0.0, 10.0]
     assert snaps[0]["vessels"][0]["id"] == "a.0"
-    assert snaps[0]["routing_params"]["w_report"] == 1.0
+    assert snaps[0]["policies"]["routing"]["params"]["w_report"] == 1.0
+    assert snaps[0]["convoys"][0]["policy_versions"] == {"routing": 0, "formation": 0}
     assert "prompt" in next(r for r in records if r["kind"] == "policy_request")
     static = world.static()
     assert static["convoys"][0] == {
@@ -280,4 +422,12 @@ def test_tracer_records_blocked_lane() -> None:
     world = make_world(detour_net(), [("c", ("P", "Q"), 1)], loss=1.0, events=closing)
     world.tracer = Tracer(buf, snapshot_every=0)
     world.step()
-    assert '"kind": "blocked"' in buf.getvalue()
+    assert '"kind": "hazard_seen"' in buf.getvalue()
+
+
+def test_storms_forming_and_clearing_are_logged() -> None:
+    ocean = Ocean(storms=(Storm((0.0, 0.0), 10.0, 1.0, 1.0, 2.0),))
+    world = make_world(line_net(), [("c", ("P", "Q"), 1)], ocean=ocean)
+    run(world, 4)
+    assert any("storm forming" in line for line in world.log)
+    assert any("cleared" in line for line in world.log)
