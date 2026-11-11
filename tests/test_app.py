@@ -230,3 +230,23 @@ def test_session_paints_and_runs_its_stepper_thread(fonts) -> None:
     assert s.view().targets
     s.close()
     assert s.stepper._stop.is_set()
+
+
+def test_session_pick_selects_a_ship_and_pauses() -> None:
+    s = _session()
+    for _ in range(400):
+        s.world.step()
+    ship = next(
+        v
+        for v in s.world.vessels.values()
+        if s.world.convoys[v.convoy].state == "sailing"
+    )
+    s.ui.actions = [("pick", s.cam.to_screen(ship.pos))]
+    s.process()
+    assert s.ui.selected == ship.id and s.ui.paused
+    s.ui.paused = False
+    s.act(("pick", (-500, -500)))
+    assert s.ui.selected is None and not s.ui.paused
+    s.ui.selected = ship.id
+    s.rerun(s.live)
+    assert s.ui.selected is None

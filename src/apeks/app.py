@@ -27,6 +27,7 @@ from apeks.render import (
     draw,
     draw_waiting,
     layout,
+    pick,
 )
 from apeks.runner import timestamp
 from apeks.world import World
@@ -163,6 +164,7 @@ class Session:
             self.stepper.stop(wait=False)  # never wait on an LLM call in flight
         geo = world.geography
         self.live, self.world = cfg, world
+        self.ui.selected = None
         self.ui.world_size = (geo.width, geo.height)
         self.cam = Camera(view=tuple(layout(self.ui.size)["map"]))
         self.cam.fit(*self.ui.world_size)
@@ -192,6 +194,10 @@ class Session:
         kind = action[0]
         if kind == "button":
             self._button(action[1])
+            return
+        if kind == "pick":
+            self.ui.selected = pick(self.world, self.cam, action[1])
+            self.ui.paused = self.ui.paused or self.ui.selected is not None
             return
         key = action[1]
         spec = next(s for s in specs(self.draft) if s.key == key)

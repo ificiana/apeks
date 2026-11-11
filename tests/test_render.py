@@ -8,6 +8,8 @@ from apeks.render import (
     EMPTY,
     LADEN,
     LAND,
+    OPEN_SEA,
+    PANEL,
     STORM,
     TEXT,
     Camera,
@@ -16,7 +18,9 @@ from apeks.render import (
     draw,
     handle_event,
     layout,
+    pick,
     port_rows,
+    ship_info,
     tail,
     tiles,
 )
@@ -214,6 +218,18 @@ def test_draw_handles_an_open_sea_without_history(fonts) -> None:
     assert isinstance(Geography.open_sea(1.0, 1.0), Geography)
 
 
+def test_draw_paints_the_map_beyond_the_world_as_open_sea(fonts) -> None:
+    world = build_world(ExperimentConfig(map="classic"))
+    ui = Ui(size=(900, 420), world_size=(1200.0, 800.0), paused=True)
+    cam = Camera(view=tuple(layout(ui.size)["map"]))
+    cam.fit(*ui.world_size)
+    cam.pan(0, 2000)  # push the world off the bottom of the view
+    surface = pygame.Surface(ui.size)
+    draw(surface, world, "classical", fonts, cam, History(), ui)
+    view = pygame.Rect(cam.view)
+    assert surface.get_at((view.centerx, view.top + 5))[:3] == OPEN_SEA
+
+
 def _pixels(rect):
     return [
         (x, y)
@@ -334,3 +350,76 @@ def test_draw_shows_controls_with_edits_highlighted(fonts) -> None:
     assert WARN in colours()
     ui.editing, ui.text = "seed", "77"
     draw(surface, world, "classic", fonts, cam, History(), ui, draft, live)
+
+
+def _sailing_world():
+    world = build_world(ExperimentConfig(map="classic", seed=3))
+    for _ in range(400):
+        world.step()
+    ui = Ui(world_size=(1200.0, 800.0))
+    cam = Camera(view=tuple(layout(ui.size)["map"]))
+    cam.fit(*ui.world_size)
+    ship = next(
+        v
+        for v in world.vessels.values()
+        if world.convoys[v.convoy].state == "sailing" and v.cargo
+    )
+    return world, ui, cam, ship
+
+
+def test_pick_finds_the_sailing_ship_under_the_cursor() -> None:
+    world, _, cam, ship = _sailing_world()
+    x, y = cam.to_screen(ship.pos)
+    assert pick(world, cam, (x + 2, y + 1)) == ship.id
+    assert pick(world, cam, (-500, -500)) is None
+
+
+def test_ship_info_lists_cargo_and_next_destinations() -> None:
+    world, _, _, ship = _sailing_world()
+    convoy = world.convoys[ship.convoy]
+    lines = ship_info(world, ship.id)
+    assert lines[0].startswith(ship.id)
+    text = "\n".join(lines)
+    assert f"cargo {len(ship.cargo)}/{ship.capacity}" in text
+    assert f"bound for {convoy.destination}" in text
+    for dest in {p.destination for p in ship.cargo}:
+        assert dest in text
+    ship.cargo = []
+    convoy.lane, convoy.destination, convoy.state = None, None, "docked"
+    text = "\n".join(ship_info(world, ship.id))
+    assert "cargo 0/" in text and "(empty)" in text and "at " in text
+    assert ship_info(world, "nope") == []
+
+
+def test_click_without_drag_picks_and_escape_closes_the_dialog() -> None:
+    ui, cam = Ui(), Camera(view=tuple(layout((1600, 900))["map"]))
+    down = pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(600, 400))
+    up = pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=(601, 400))
+    handle_event(down, ui, cam)
+    handle_event(up, ui, cam)
+    assert ui.actions == [("pick", (601, 400))]
+    ui.actions = []
+    handle_event(down, ui, cam)
+    handle_event(
+        pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=(700, 400)), ui, cam
+    )
+    assert ui.actions == []  # a drag is not a click
+    ui.selected = "v1"
+    esc = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_ESCAPE, unicode="")
+    assert handle_event(esc, ui, cam) is True and ui.selected is None
+    assert handle_event(esc, ui, cam) is False
+
+
+def test_draw_shows_the_ship_dialog(fonts) -> None:
+    world, ui, cam, ship = _sailing_world()
+    surface = pygame.Surface(ui.size)
+    draw(surface, world, "classical", fonts, cam, History(), ui)
+    before = surface.copy()
+    ui.selected = ship.id
+    draw(surface, world, "classical", fonts, cam, History(), ui)
+    x, y = (int(c) for c in cam.to_screen(ship.pos))
+    box = pygame.Rect(x + 12, y + 12, 40, 20).clip(pygame.Rect(cam.view))
+    assert any(surface.get_at(p) != before.get_at(p) for p in _pixels(box))
+    assert any(surface.get_at(p)[:3] == PANEL for p in _pixels(pygame.Rect(cam.view)))
+    ui.selected = "gone"  # a ship from an old world draws nothing
+    draw(surface, world, "classical", fonts, cam, History(), ui)

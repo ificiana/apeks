@@ -15,25 +15,27 @@ from apeks.geometry import Vec, add, normalize, scale
 from apeks.mapgen import Geography
 from apeks.world import World
 
-# Light theme.
+# Light theme for the panels; natural colours for the map.
 BG = (243, 245, 248)
 PANEL = (255, 255, 255)
 CARD = (236, 240, 245)
 RULE = (214, 220, 228)
 TEXT = (30, 38, 52)
 MUTED = (100, 112, 130)
-DEEP = (178, 210, 232)
-SHALLOW = (206, 228, 243)
-LAND = (228, 222, 200)
-COAST = (186, 166, 118)
-LANE = (52, 104, 168)
-CLOSED = (212, 48, 48)
-NODE = (88, 108, 138)
+DEEP = (22, 66, 112)
+OPEN_SEA = (14, 44, 78)  # beyond the world's edge
+SHALLOW = (46, 112, 156)
+LAND = (96, 128, 76)
+COAST = (210, 190, 140)
+LANE = (200, 222, 240)
+CLOSED = (236, 64, 64)
+NODE = (220, 232, 244)
 PORT = (255, 255, 255)
-CURRENT = (40, 120, 190)
-STORM = (128, 70, 180)
-LADEN = (226, 120, 10)
-EMPTY = (10, 140, 160)
+CURRENT = (120, 190, 230)
+STORM = (170, 100, 220)
+LADEN = (255, 170, 40)
+EMPTY = (110, 235, 230)
+MAP_TEXT = (245, 248, 252)  # labels drawn over the sea
 GOOD, WARN, BAD = (30, 150, 80), (196, 128, 0), (212, 48, 48)
 SERIES = {"delivered": (30, 150, 80), "backlog": (220, 110, 30)}
 
@@ -134,6 +136,8 @@ class Ui:
     editing: str | None = None  # key of the field being typed into
     text: str = ""
     message: str = ""
+    selected: str | None = None  # vessel whose dialog is open
+    press: tuple[int, int] | None = None  # where the left button went down
     actions: list[tuple[Any, ...]] = field(default_factory=list)
     """Control actions from input, for the session to run."""
 
@@ -241,9 +245,11 @@ def handle_event(
         if action:
             ui.actions.append(action)
         else:
-            ui.dragging = True
+            ui.dragging, ui.press = True, event.pos
     elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
-        ui.dragging = False
+        if ui.press and math.dist(ui.press, event.pos) <= CLICK_SLOP:
+            ui.actions.append(("pick", event.pos))
+        ui.dragging, ui.press = False, None
     elif event.type == pygame.MOUSEMOTION:
         ui.mouse = event.pos
         if ui.dragging:
@@ -278,7 +284,9 @@ def _key(key: int, ui: Ui, cam: Camera) -> bool:
         pygame.K_w: (0.0, PAN_STEP),
         pygame.K_s: (0.0, -PAN_STEP),
     }
-    if key == pygame.K_ESCAPE:
+    if key == pygame.K_ESCAPE and ui.selected:
+        ui.selected = None
+    elif key == pygame.K_ESCAPE:
         return False
     if key in HOTKEYS:
         ui.actions.append(("button", HOTKEYS[key]))
@@ -403,6 +411,7 @@ def _cells(
 
 def _draw_map(surface, world: World, fonts, cam: Camera, ui: Ui) -> None:
     view = pygame.Rect(cam.view)
+    surface.fill(OPEN_SEA, view)
     geo = world.geography or Geography.open_sea(*ui.world_size)
     tl, br = cam.to_screen((0.0, 0.0)), cam.to_screen((geo.width, geo.height))
     pygame.draw.rect(surface, DEEP, pygame.Rect(tl, (br[0] - tl[0], br[1] - tl[1])))
@@ -452,7 +461,7 @@ def _draw_map(surface, world: World, fonts, cam: Camera, ui: Ui) -> None:
         r = max(5.0, 7 * cam.zoom)
         pygame.draw.circle(surface, ring, pos, r + 3)
         pygame.draw.circle(surface, PORT, pos, r)
-        label = small.render(f"{port}  {waiting}", True, TEXT)
+        label = small.render(f"{port}  {waiting}", True, MAP_TEXT)
         surface.blit(label, (pos[0] + r + 5, pos[1] - label.get_height() / 2))
     for v in world.vessels.values():
         if world.convoys[v.convoy].state != "sailing":
@@ -462,6 +471,61 @@ def _draw_map(surface, world: World, fonts, cam: Camera, ui: Ui) -> None:
             surface, colour, cam.to_screen(v.pos), max(2.5, cam.zoom * 3)
         )
     _draw_minimap(surface, world, geo, cam, view)
+    if ui.selected in world.vessels:
+        _draw_dialog(surface, world, ui.selected, fonts, cam)
+
+
+CLICK_SLOP = 4  # pixels a click may move and still count as a click
+PICK_RADIUS = 10  # pixels around a ship that select it
+
+
+def pick(world: World, cam: Camera, pos: Vec) -> str | None:
+    """The sailing ship nearest ``pos`` on screen, if within reach."""
+    best, near = None, PICK_RADIUS
+    for v in world.vessels.values():
+        if world.convoys[v.convoy].state != "sailing":
+            continue
+        d = math.dist(cam.to_screen(v.pos), pos)
+        if d <= near:
+            best, near = v.id, d
+    return best
+
+
+def ship_info(world: World, vid: str) -> list[str]:
+    """Dialog lines for vessel ``vid``: where it is going and what it carries."""
+    v = world.vessels.get(vid)
+    if v is None:
+        return []
+    convoy = world.convoys[v.convoy]
+    lines = [f"{v.id}  convoy {convoy.id}  {convoy.state}"]
+    if convoy.lane:
+        lane = world.network.lanes[convoy.lane]
+        lines.append(f"on {lane.a} > {lane.b}, next {lane.b}")
+    else:
+        lines.append(f"at {convoy.node}")
+    if convoy.destination:
+        lines.append(f"bound for {convoy.destination}")
+    lines.append(f"cargo {len(v.cargo)}/{v.capacity}")
+    drops: dict[str, int] = {}
+    for p in v.cargo:
+        drops[p.destination] = drops.get(p.destination, 0) + 1
+    lines += [f"  {n} for {port}" for port, n in sorted(drops.items())] or ["  (empty)"]
+    return lines
+
+
+def _draw_dialog(surface, world: World, vid: str, fonts, cam: Camera) -> None:
+    font = fonts["s"]
+    x, y = cam.to_screen(world.vessels[vid].pos)
+    pygame.draw.circle(surface, MAP_TEXT, (x, y), PICK_RADIUS, 2)
+    rows = [font.render(t, True, TEXT) for t in ship_info(world, vid)]
+    lh = font.get_linesize()
+    box = pygame.Rect(0, 0, max(r.get_width() for r in rows) + 20, lh * len(rows) + 16)
+    box.topleft = (x + 12, y + 12)
+    box.clamp_ip(pygame.Rect(cam.view))
+    surface.fill(PANEL, box)
+    pygame.draw.rect(surface, RULE, box, 1)
+    for i, r in enumerate(rows):
+        surface.blit(r, (box.x + 10, box.y + 8 + i * lh))
 
 
 @lru_cache(maxsize=4)
@@ -488,7 +552,7 @@ def _draw_minimap(surface, world: World, geo: Geography, cam: Camera, view) -> N
     seen = pygame.Rect(
         box.x + a[0] * k, box.y + a[1] * k, (b[0] - a[0]) * k, (b[1] - a[1]) * k
     )
-    pygame.draw.rect(surface, TEXT, seen.clip(box), 1)
+    pygame.draw.rect(surface, MAP_TEXT, seen.clip(box), 1)
     pygame.draw.rect(surface, RULE, box, 1)
 
 
