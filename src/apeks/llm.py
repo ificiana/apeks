@@ -8,6 +8,8 @@ executing the previous policy meanwhile.
 """
 
 import json
+import subprocess
+import tempfile
 import urllib.request
 from dataclasses import asdict, dataclass, field
 from typing import Any, Protocol
@@ -56,6 +58,54 @@ class OllamaClient:
         if not isinstance(text, str):
             raise ValueError(f"unexpected reply: {reply!r}")
         return text
+
+
+SYSTEM_PROMPT = "You write JSON policies for a fleet simulation. Reply only with JSON."
+
+
+@dataclass
+class ClaudeCodeClient:
+    """Headless Claude Code (``claude -p``) with schema-checked output, no tools.
+
+    Runs in an empty temporary directory so no project instructions leak in.
+    """
+
+    model: str
+    timeout: float = 300.0
+    command: str = "claude"
+    cost_usd: float = 0.0
+
+    def complete(self, prompt: str, schema: dict[str, Any]) -> str:
+        cmd = [
+            self.command,
+            "-p",
+            prompt,
+            "--model",
+            self.model,
+            "--output-format",
+            "json",
+            "--json-schema",
+            json.dumps(schema),
+            "--tools",
+            "",
+            "--no-session-persistence",
+            "--system-prompt",
+            SYSTEM_PROMPT,
+        ]
+        with tempfile.TemporaryDirectory() as cwd:
+            try:
+                done = subprocess.run(
+                    cmd, capture_output=True, text=True, timeout=self.timeout, cwd=cwd
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise ValueError(f"claude timed out after {self.timeout}s") from exc
+        if done.returncode != 0:
+            raise ValueError(f"claude exited {done.returncode}: {done.stderr[-500:]}")
+        reply = json.loads(done.stdout)
+        self.cost_usd += reply.get("total_cost_usd", 0.0)
+        if reply.get("is_error") or "structured_output" not in reply:
+            raise ValueError(f"claude gave no policy: {reply.get('result')!r}")
+        return json.dumps(reply["structured_output"])
 
 
 def _jsonable(params: Any) -> dict[str, Any]:

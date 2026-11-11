@@ -105,3 +105,24 @@ def test_timestamp_is_sortable_local_time() -> None:
     import re
 
     assert re.fullmatch(r"\d{8}-\d{6}", runner.timestamp())
+
+
+def test_make_client_claude_backend() -> None:
+    from apeks.llm import ClaudeCodeClient
+
+    client = make_client(ExperimentConfig(llm="claude", model="claude-haiku-5-5"))
+    assert isinstance(client, ClaudeCodeClient) and client.model == "claude-haiku-5-5"
+
+
+def test_cli_model_override(tmp_path, capsys, monkeypatch) -> None:
+    seen = {}
+    real = runner.run
+
+    def spy(cfg, **kw):
+        seen["model"] = cfg.model
+        return real(cfg, **kw)
+
+    monkeypatch.setattr(runner, "run", spy)
+    args = [str(ARMS / "classical.toml"), "--ticks", "1", "--no-trace"]
+    runner.main([*args, "--logs", str(tmp_path), "--model", "x"])
+    assert seen["model"] == "x"

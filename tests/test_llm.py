@@ -1,10 +1,17 @@
 import io
 import json
+import subprocess
 import urllib.request
 
 import pytest
 
-from apeks.llm import OllamaClient, PolicyAuthor, StubClient, build_prompt
+from apeks.llm import (
+    ClaudeCodeClient,
+    OllamaClient,
+    PolicyAuthor,
+    StubClient,
+    build_prompt,
+)
 from apeks.routing import ScoredRouteParams
 
 
@@ -99,3 +106,50 @@ def test_ollama_client_rejects_malformed_reply(monkeypatch, bad) -> None:
     )
     with pytest.raises(ValueError):
         OllamaClient(model="m").complete("p", {})
+
+
+def fake_run(stdout: str, returncode: int = 0, seen: dict | None = None):
+    def run(cmd, **kw):
+        if seen is not None:
+            seen["cmd"], seen["kw"] = cmd, kw
+        return subprocess.CompletedProcess(cmd, returncode, stdout=stdout, stderr="err")
+
+    return run
+
+
+def test_claude_client_runs_headless_with_schema(monkeypatch) -> None:
+    seen: dict = {}
+    reply = {"is_error": False, "structured_output": {"x": 1}, "total_cost_usd": 0.5}
+    monkeypatch.setattr(subprocess, "run", fake_run(json.dumps(reply), seen=seen))
+    client = ClaudeCodeClient(model="claude-haiku-5-5", timeout=9.0)
+    assert json.loads(client.complete("hello", {"type": "object"})) == {"x": 1}
+    cmd = seen["cmd"]
+    assert cmd[:3] == ["claude", "-p", "hello"]
+    assert cmd[cmd.index("--model") + 1] == "claude-haiku-5-5"
+    assert json.loads(cmd[cmd.index("--json-schema") + 1]) == {"type": "object"}
+    assert cmd[cmd.index("--tools") + 1] == ""
+    assert seen["kw"]["timeout"] == 9.0
+    assert client.cost_usd == 0.5
+
+
+@pytest.mark.parametrize(
+    ("stdout", "code"),
+    [
+        ('{"is_error": true, "result": "nope"}', 0),
+        ('{"is_error": false, "result": "no structure"}', 0),
+        ("", 1),
+    ],
+)
+def test_claude_client_rejects_failures(monkeypatch, stdout, code) -> None:
+    monkeypatch.setattr(subprocess, "run", fake_run(stdout, code))
+    with pytest.raises(ValueError):
+        ClaudeCodeClient(model="m").complete("p", {})
+
+
+def test_claude_client_timeout_is_a_value_error(monkeypatch) -> None:
+    def slow(cmd, **kw):
+        raise subprocess.TimeoutExpired(cmd, 1.0)
+
+    monkeypatch.setattr(subprocess, "run", slow)
+    with pytest.raises(ValueError, match="timed out"):
+        ClaudeCodeClient(model="m").complete("p", {})

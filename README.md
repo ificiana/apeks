@@ -73,7 +73,7 @@ config:
 | `llm_routing.toml` | llm | boids |
 | `llm_formation.toml` | aco | llm |
 
-Other config keys: `seed`, `ticks`, `llm` (`stub` or `ollama`), `model`, `url`,
+Other config keys: `seed`, `ticks`, `llm` (`stub`, `ollama` or `claude`), `model`, `url`,
 `latency`, `budget`.
 
 ## Metrics
@@ -103,7 +103,7 @@ uv run apeks-run experiments/*.toml         # headless, one JSON summary line pe
 uv run apeks-run experiments/llm.toml --llm ollama --ticks 3500
 ```
 
-`--ticks` and `--llm` override every config. Each arm saves two files under
+`--ticks`, `--llm` and `--model` override every config. Each arm saves two files under
 `logs/` (git-ignored; `--logs DIR` to change), stamped with the invocation's
 local time:
 
@@ -131,10 +131,12 @@ re-simulating it. Every record has `t` and `kind`:
 6000-tick run). Load a trace with `apeks.trace.read_trace(path, kind=None)` or
 `pandas.read_json(path, lines=True)`.
 
-### Ollama
+### LLM backends
 
 The `stub` backend replies `{}`, which leaves the default policy in force, so
-runs work offline. For a real model:
+runs work offline. Two real backends:
+
+#### Ollama
 
 ```sh
 ollama pull lfm3      # or any model that supports structured output
@@ -144,6 +146,17 @@ uv run apeks-run experiments/llm.toml --llm ollama
 Calls go to `POST {url}/api/generate` with the policy's JSON schema as
 `format`, thinking off and temperature 0. Set `url` in a config to use a
 remote server.
+
+#### Claude Code
+
+```sh
+uv run apeks-run experiments/llm.toml --llm claude --model claude-haiku-5-5
+```
+
+Each call runs headless `claude -p` with the policy's JSON schema as
+`--json-schema`, no tools, no saved session and a short system prompt, from an
+empty temporary directory so no project instructions reach the model. It needs
+a logged-in `claude` CLI on `PATH`. Calls take a few seconds each.
 
 ## Layout
 
@@ -156,7 +169,7 @@ remote server.
 | `src/apeks/policy.py` | typed, bounded policy fields; JSON schema; validation |
 | `src/apeks/routing.py` | ACO and scored routing engines |
 | `src/apeks/formation.py` | Boids and slot formation engines |
-| `src/apeks/llm.py` | LLM clients and the policy author |
+| `src/apeks/llm.py` | LLM clients (stub, Ollama, Claude Code) and the policy author |
 | `src/apeks/world.py` | vessels, convoys, ports, events, metrics, the step loop |
 | `src/apeks/scenario.py` | the default map, ocean, events and convoys |
 | `src/apeks/experiment.py` | experiment configs and world assembly |
@@ -172,5 +185,5 @@ uv run ruff check .
 uv run ruff format .
 ```
 
-Tests run offline and headless with a seeded `random`. The LLM is a stub or a
-faked HTTP call.
+Tests run offline and headless with a seeded `random`. The LLM is a stub, a
+faked HTTP call or a faked `claude` process.

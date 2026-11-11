@@ -8,14 +8,20 @@ from typing import Any
 
 from apeks import config, scenario
 from apeks.formation import BoidsFormation, BoidsParams, SlotFormation, SlotParams
-from apeks.llm import LlmClient, OllamaClient, PolicyAuthor, StubClient
+from apeks.llm import (
+    ClaudeCodeClient,
+    LlmClient,
+    OllamaClient,
+    PolicyAuthor,
+    StubClient,
+)
 from apeks.radio import Radio
 from apeks.routing import AcoParams, AcoRouting, ScoredRouteParams, ScoredRouting
 from apeks.world import World, make_fleet
 
 ROUTING = ("aco", "llm")
 FORMATION = ("boids", "llm")
-BACKENDS = ("stub", "ollama")
+BACKENDS = ("stub", "ollama", "claude")
 
 ROUTING_PURPOSE = (
     "At every waypoint a convoy scores its open lanes and takes the lowest score: "
@@ -65,6 +71,8 @@ def load_config(path: Path) -> ExperimentConfig:
 def make_client(cfg: ExperimentConfig) -> LlmClient:
     if cfg.llm == "ollama":
         return OllamaClient(model=cfg.model, url=cfg.url)
+    if cfg.llm == "claude":
+        return ClaudeCodeClient(model=cfg.model)
     return StubClient()
 
 

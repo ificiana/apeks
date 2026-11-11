@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from apeks.experiment import ExperimentConfig, build_world, load_config
+from apeks.experiment import BACKENDS, ExperimentConfig, build_world, load_config
 from apeks.llm import LlmClient
 from apeks.trace import Tracer
 
@@ -40,7 +40,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="apeks-run", description=__doc__)
     parser.add_argument("configs", nargs="+", type=Path)
     parser.add_argument("--ticks", type=int, help="override every config's ticks")
-    parser.add_argument("--llm", choices=["stub", "ollama"], help="override backend")
+    parser.add_argument("--llm", choices=BACKENDS, help="override backend")
+    parser.add_argument("--model", help="override the LLM model")
     parser.add_argument(
         "--logs", type=Path, default=Path("logs"), help="where results go (logs/)"
     )
@@ -57,6 +58,8 @@ def main(argv: list[str] | None = None) -> int:
             cfg = replace(cfg, ticks=args.ticks)
         if args.llm is not None:
             cfg = replace(cfg, llm=args.llm)
+        if args.model is not None:
+            cfg = replace(cfg, model=args.model)
         if args.no_trace:
             result = run(cfg)
         else:
