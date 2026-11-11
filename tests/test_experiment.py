@@ -87,10 +87,10 @@ def test_seed_list_expands_to_one_config_per_seed(tmp_path: Path) -> None:
     assert [(c.name, c.seed) for c in load_configs(single)] == [("one", 3)]
 
 
-def test_sweep_arms_cover_seeds_0_to_10() -> None:
+def test_sweep_arms_cover_seeds_0_to_49() -> None:
     for name in ["classical", "llm", "llm_routing", "llm_formation"]:
         cfgs = load_configs(ARMS / f"{name}_sweep.toml")
-        assert [c.seed for c in cfgs] == list(range(11))
+        assert [c.seed for c in cfgs] == list(range(50))
         assert cfgs[0].name == f"{name}_s0"
         base = load_config(ARMS / f"{name}.toml")
         assert cfgs[0] == base.__class__(**{**base.__dict__, "name": f"{name}_s0"})
