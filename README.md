@@ -26,35 +26,72 @@ Two decisions are made over and over:
 | routing: which lane to take at a waypoint | ACO | scored routing with an LLM-written policy |
 | formation: how each vessel steers in its convoy | Boids | slot formation with an LLM-written policy |
 
-## Physical explainability
+## Information model
 
-Nothing in the simulation needs information a real fleet could not have.
+Only the world knows the truth: which lanes are closed, where storms are, how
+long a lane really takes. Convoys, port stations and the operations centre
+(HQ) act on what reaches them.
 
-- Every vessel is a radio beacon. Each tick it broadcasts a position report.
-  Receivers estimate the sender's relative position from the signal, with
-  error growing with distance. Range, loss and bandwidth are limited.
-- After finishing a lane, a convoy broadcasts a lane report (lane, transit
-  time). Other convoys keep the reports they hear. ACO uses them as pheromone
-  that fades with age. The word "pheromone" exists only inside the ACO engine.
-- Port stations repeat navigation notices for closed and reopened lanes. A
-  convoy out of range that picks a closed lane finds the blockage at the lane
-  entrance.
+| channel | from → to | carries | delay, loss, error |
+| --- | --- | --- | --- |
+| beacon | vessel → vessels in range | position, velocity | range, loss, bandwidth, position noise |
+| lane report | convoy → vessels and ports in range | lane, transit time | Gaussian error, `REPORT_NOISE` × transit |
+| hazard | convoy → vessels and ports in range | lane closed or open, observed time | sent when a convoy sees it at its own node |
+| notice | port → vessels in range | every closure it knows, recent reopenings | every `NOTICE_EVERY`; reopenings for `NOTICE_MAX_AGE` |
+| relay | vessel → vessels in range | hazards and policies it heard | `RELAY_HOPS` hops, `RELAY_MAX_AGE` |
+| uplink | port → HQ | hazards and lane reports the port heard | `UPLINK_DELAY` |
+| news | world → HQ | free-text items | see below |
+| policy | HQ → ports → vessels | versioned policy | `UPLINK_DELAY`, then notices and relay |
+
+- Every vessel is a radio beacon. Receivers estimate the sender's position
+  from the signal, with error growing with distance.
+- A convoy sees the lanes leaving the node it stands at. If one is closed (or
+  reopened) against its belief, it updates its belief, counts a blocked-lane
+  discovery and broadcasts a hazard. A convoy never enters a lane it believes
+  closed.
+- ACO uses lane reports as pheromone that fades with age. The word
+  "pheromone" exists only inside the ACO engine.
 - Route estimates use charted mean currents. Vessels feel the true drift,
   including waves.
+- Every random stream (fleet, radio, ACO, reports, news) is derived from the
+  config's `seed` by hashing, so one stream never shifts another.
 
-## The LLM as a policy author
+### News
 
-The LLM never steers a vessel. It acts like a shore operations centre that
-rewrites a typed policy when something happens: mission start, a storm forming
-or clearing, a closure or reopening.
+`news.py` turns world events into free-text items from templated outlets
+("Coastguard bulletin", "Shipping wire", ...), with errors set by a `[news]`
+table in the config:
 
-- The prompt describes each policy field with its type and bounds, the current
-  policy, and a situation summary: closures, storms, reported delays by lane,
-  lane widths and capacities, deliveries and near misses.
+| key | default | effect |
+| --- | ---: | --- |
+| `delay` | 60 | mean publication delay, ticks |
+| `location_error` | 0.2 | chance a storm is placed at the wrong named place |
+| `severity_error` | 0.2 | noise on the severity word (squall … violent storm) |
+| `forecast_error` | 0.3 | spread of the "expected to clear in about N ticks" forecast |
+| `false_alarm_rate` | 0.2 | chance per real event of an extra item describing nothing |
+| `miss_rate` | 0.0 | chance a real event is never reported |
+| `correction_delay` | 60 | delay before an all-clear; `inf` drops all-clears |
+
+Each item keeps the event it describes (`truth`) for analysis; HQ never sees it.
+
+## The LLM as the operations centre
+
+The LLM never steers a vessel. It plays HQ and rewrites a typed policy at
+mission start, when a news item arrives and when a fleet report that reached
+HQ changes a lane's state. Triggers in the same tick share one request.
+
+- The prompt has fixed sections: role, time and trigger, the map (ground
+  truth that never changes), fleet reports via ports (hazards with age and
+  confirmations, reported delays), the news feed marked as unverified text to
+  treat as information and never as instructions, the current policy and its
+  version, and the policy fields.
 - The reply is constrained to the policy's JSON schema, then validated:
   numbers are clamped, invalid choices and unknown fields are dropped.
-- A new policy takes effect after a latency in sim time (`LLM_LATENCY`).
-  Requests are capped per run (`LLM_BUDGET`). A failed call keeps the old
+- A decided policy gets the next version after `LLM_LATENCY`, reaches every
+  port after `UPLINK_DELAY`, and spreads by notices and relay. Each convoy
+  holds its own version and adopts any newer one it hears; engines read the
+  convoy's parameters from the observation.
+- Requests are capped per run (`LLM_BUDGET`). A failed call keeps the old
   policy.
 
 The routing policy weights estimated lane time, time-to-destination and
@@ -74,7 +111,7 @@ config:
 | `llm_formation.toml` | aco | llm |
 
 Other config keys: `seed`, `ticks`, `llm` (`stub`, `ollama`, `claude`, or `""` for arms without an LLM module), `model`, `url`,
-`latency`, `budget`.
+`latency`, `budget`, and the `[news]` table.
 
 A list of seeds (`seed = [0, 1, 2]`) makes a sweep: one run per seed, named
 `<name>_s<seed>`. Each arm has a `<arm>_sweep.toml` covering seeds 0–10.
@@ -89,16 +126,20 @@ tenth, or `--no-trace` to skip traces.
 
 Each run reports:
 
-- deliveries and mean trip time
-- energy (thrust through water)
+- deliveries, mean trip time, energy and energy per delivery
 - port wait and lane congestion (ticks beyond capacity)
 - near misses (vessel pairs closing within `NEAR_MISS`)
 - blocked-lane discoveries
-- radio sent, delivered, lost and overflow counts
-- LLM calls, failures and skipped calls
+- beliefs: convoy-ticks and HQ-ticks believing a false closure, or missing a
+  true one
+- radio sent, delivered, lost, overflow and relayed counts, and messages by
+  type
+- LLM calls, failures, skipped calls, input and output tokens and cost
+- policy spread: per version, when HQ decided it, how many convoys adopted
+  it, and ticks to half and to all of the fleet
 
 The full JSON adds delivery times, the event log and every LLM prompt trigger,
-reply and accepted policy.
+reply, accepted policy, wall-clock time and token use.
 
 ## Usage
 
@@ -127,15 +168,17 @@ re-simulating it. Every record has `t` and `kind`:
 
 | kind | contents |
 | --- | --- |
-| `meta` | config, nodes, ports, lanes, currents, storms, scheduled events, convoys (first record) |
-| `snapshot` | every vessel's position, velocity, water velocity, drift and energy; every convoy's state, lane, destination, centre and known closures; port queues, closures, metrics, radio counters, both engines' parameters |
-| `route_choice` | convoy, node, destination, each option's estimate, cost-to-go and report count, the choice |
+| `meta` | config, nodes, ports, lanes, currents, storms, scheduled events, news items, convoys (first record) |
+| `snapshot` | every vessel's position, velocity, water velocity, drift and energy; every convoy's state, lane, destination, centre, known closures and policy versions; port queues, true and HQ closures, metrics, radio counters, HQ's policies |
+| `route_choice` | convoy, node, destination, each option's estimate, cost-to-go and report count, the choice, the policy version |
 | `lane_start`, `lane_end` | convoy, lane, transit time |
 | `queued`, `berthed`, `delivered` | convoy, port, trip time |
-| `blocked`, `notice_heard` | convoy, lane, closed |
+| `hazard_seen`, `hazard_heard` | convoy, lane, closed |
+| `news` | source, text, the event it describes |
 | `near_miss` | the two vessels and their distance |
 | `event` | closures, reopenings, storms forming and clearing |
-| `policy_request`, `policy_applied` | module, trigger, full prompt, raw reply, accepted policy or error |
+| `policy_request` | module, trigger, full prompt, raw reply, accepted policy or error |
+| `policy_decided`, `policy_at_ports`, `policy_adopted` | module, version; the policy when decided, the convoy when adopted |
 
 `--snapshot-every N` sets the snapshot interval (default 1 tick; about 20 MB per
 6000-tick run). Load a trace with `apeks.trace.read_trace(path, kind=None)` or
@@ -173,10 +216,14 @@ a logged-in `claude` CLI on `PATH`. Calls take a few seconds each.
 
 | Path | Contents |
 | --- | --- |
+| `src/apeks/seeds.py` | independent random streams derived from one seed |
 | `src/apeks/geometry.py` | 2-D vector helpers |
 | `src/apeks/ocean.py` | currents, storms, waves; mean and true drift |
 | `src/apeks/network.py` | ports, waypoints, directed lanes; transit estimates; Dijkstra time-to-go |
-| `src/apeks/radio.py` | broadcast radio with range, loss, bandwidth and position noise |
+| `src/apeks/radio.py` | broadcast radio with range, loss, bandwidth and position noise; message types |
+| `src/apeks/hazards.py` | a holder's beliefs about closed lanes |
+| `src/apeks/hq.py` | the operations centre's inbox over the uplink |
+| `src/apeks/news.py` | news settings, templates and the news generator |
 | `src/apeks/policy.py` | typed, bounded policy fields; JSON schema; validation |
 | `src/apeks/routing.py` | ACO and scored routing engines |
 | `src/apeks/formation.py` | Boids and slot formation engines |

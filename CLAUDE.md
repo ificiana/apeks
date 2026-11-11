@@ -17,8 +17,9 @@ Guidance for Claude Code in this repository. The global rules apply: strict TDD,
 ## Layout
 
 - `src/apeks/config.py`: constants only.
-- Pure simulation, no pygame: `geometry`, `ocean`, `network`, `radio`, `policy`, `routing`, `formation`, `llm`, `world`, `scenario`, `experiment`, `runner`, `trace`.
-- Engines share one observation API per module; the word "pheromone" stays inside the ACO engine.
+- Pure simulation, no pygame: `seeds`, `geometry`, `ocean`, `network`, `radio`, `hazards`, `hq`, `news`, `policy`, `routing`, `formation`, `llm`, `world`, `scenario`, `experiment`, `runner`, `trace`.
+- Only `World` holds the truth (closures, storms, transit times). Convoys, port stations and HQ act on beliefs that reach them by radio, uplink or news. Every random stream comes from `seeds.derive(seed, name)`.
+- Engines read their parameters from the observation (`obs.params`), since each convoy holds its own policy version. Engines share one observation API per module; the word "pheromone" stays inside the ACO engine.
 - `src/apeks/render.py`: drawing onto a `pygame.Surface`.
 - `src/apeks/app.py`: `parse_args`, `change_speed` and `main`, the window and event loop.
 - `experiments/`: one TOML config per arm.
