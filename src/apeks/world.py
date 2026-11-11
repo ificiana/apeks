@@ -28,6 +28,7 @@ from apeks import config
 from apeks.cargo import Package, detours, group, load, next_port, target_port
 from apeks.formation import FormationObservation, Neighbour
 from apeks.geometry import (
+    Grid,
     Vec,
     add,
     clamp_length,
@@ -52,7 +53,7 @@ from apeks.radio import (
     PositionReport,
     Radio,
 )
-from apeks.routing import Report, RouteObservation, RouteOption
+from apeks.routing import Report, ReportLog, RouteObservation, RouteOption
 from apeks.trace import Tracer
 
 if TYPE_CHECKING:
@@ -115,7 +116,7 @@ class Convoy:
     state: str = "sailing"  # sailing | queued | berthed | docked | loading
     service_until: float = 0.0
     hazards: HazardBook = field(default_factory=HazardBook)
-    reports: dict[str, list[Report]] = field(default_factory=dict)
+    reports: dict[str, ReportLog] = field(default_factory=dict)
     policies: dict[str, tuple[int, Any]] = field(default_factory=dict)
     backlogs: dict[str, tuple[int, float]] = field(default_factory=dict)
     outbox: list[Message] = field(default_factory=list)
@@ -153,7 +154,7 @@ class Convoy:
     def _add_report(self, key: tuple[str, str, float], report: Report) -> None:
         if key not in self._seen:
             self._seen[key] = report
-            self.reports.setdefault(key[1], []).append(report)
+            self.reports.setdefault(key[1], ReportLog()).append(report)
 
     def hear(
         self, msg: LaneReport | Hazard | PolicyMsg | Backlog, now: float
@@ -628,7 +629,7 @@ class World:
                 to_node=lane.b,
                 estimate=costs[lane.id],
                 cost_to_go=to_go.get(lane.b, math.inf),
-                reports=tuple(convoy.reports.get(lane.id, ())),
+                reports=convoy.reports.get(lane.id, ReportLog()),
             )
             for lane in net.out_lanes(convoy.node, known)
         )
@@ -886,12 +887,8 @@ class World:
                         self.metrics["empty_distance"] += length(v.vel) * config.DT
 
     def _near_misses(self) -> None:
-        ids = sorted(self.vessels)
-        close = set()
-        for i, a in enumerate(ids):
-            for b in ids[i + 1 :]:
-                if dist(self.vessels[a].pos, self.vessels[b].pos) < config.NEAR_MISS:
-                    close.add((a, b))
+        pos = {k: v.pos for k, v in self.vessels.items()}
+        close = Grid(pos, config.NEAR_MISS).pairs(config.NEAR_MISS)
         self.metrics["near_misses"] += len(close - self._close_pairs)
         for a, b in sorted(close - self._close_pairs):
             gap = dist(self.vessels[a].pos, self.vessels[b].pos)

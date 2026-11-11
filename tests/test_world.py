@@ -11,7 +11,7 @@ from apeks.network import SeaNetwork
 from apeks.news import NewsItem
 from apeks.ocean import Ocean, Storm
 from apeks.radio import Backlog, Hazard, LaneReport, PolicyMsg, Radio
-from apeks.routing import Report, ScoredRouteParams, ScoredRouting
+from apeks.routing import Report, ReportLog, ScoredRouteParams, ScoredRouting
 from apeks.world import Convoy, Event, Vessel, World, make_fleet, reverse
 
 
@@ -107,6 +107,8 @@ def test_convoy_hears_hazards_policies_and_dedupes_reports() -> None:
     assert c.hear(report, 0.0) is None
     c.hear(report, 0.0)
     assert c.reports == {"P>Q": [Report(50.0, 10.0)]}
+    assert isinstance(c.reports["P>Q"], ReportLog)
+    assert isinstance(c.knowledge()["reports"]["P>Q"], ReportLog)
     assert c.destination == "Q"
 
 

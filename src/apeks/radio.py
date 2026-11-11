@@ -9,7 +9,7 @@ import random
 from dataclasses import dataclass, field
 from typing import Any
 
-from apeks.geometry import Vec, dist, sub
+from apeks.geometry import Grid, Vec, dist, sub
 
 
 @dataclass(frozen=True)
@@ -110,10 +110,12 @@ class Radio:
         queue, self._queue = self._queue, []
         self.stats["overflow"] += max(0, len(queue) - self.bandwidth)
         out: dict[str, list[Received]] = {}
+        grid = Grid(receivers, self.range)
         for message, origin in queue[: self.bandwidth]:
-            for rid, pos in receivers.items():
+            for rid in grid.near(origin, self.range):
+                pos = receivers[rid]
                 d = dist(pos, origin)
-                if rid == message.sender or d > self.range:
+                if rid == message.sender:
                     continue
                 if self.rng.random() < self.loss:
                     self.stats["lost"] += 1

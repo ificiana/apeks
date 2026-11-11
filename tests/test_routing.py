@@ -8,6 +8,7 @@ from apeks.routing import (
     AcoParams,
     AcoRouting,
     Report,
+    ReportLog,
     RouteObservation,
     RouteOption,
     ScoredRouteParams,
@@ -17,7 +18,8 @@ from apeks.routing import (
 
 
 def opt(lane, est, ctg=0.0, reports=()) -> RouteOption:
-    return RouteOption(lane, lane[-1], est, ctg, tuple(reports))
+    reports = reports if isinstance(reports, ReportLog) else tuple(reports)
+    return RouteOption(lane, lane[-1], est, ctg, reports)
 
 
 def choose(engine, o: RouteObservation) -> str | None:
@@ -81,3 +83,27 @@ def test_scored_routing_uses_recent_reports_only() -> None:
     other = opt("A>Y", 15.0, 10.0)
     assert choose(engine, obs(slow, other)) == "A>Y"
     assert choose(engine, obs(stale, other)) == "A>X"
+
+
+def test_report_log_fades_incrementally_like_the_full_sum() -> None:
+    rng = random.Random(3)
+    log, plain = ReportLog(), []
+    p = AcoParams(memory=50.0)
+    now = 0.0
+    for _ in range(200):
+        now += rng.uniform(0.0, 20.0)
+        r = Report(rng.uniform(5.0, 50.0), now - rng.uniform(0.0, 100.0))
+        log.append(r)
+        plain.append(r)
+        for m in (50.0, 400.0):
+            full = sum(math.exp(-(now - x.finished_at) / m) / x.transit for x in plain)
+            assert log.faded(now, m) == pytest.approx(full, rel=1e-9)
+        a = pheromone(opt("x", 10.0, reports=log), now, p)
+        assert a == pytest.approx(pheromone(opt("x", 10.0, reports=plain), now, p))
+    assert ReportLog().faded(5.0, 10.0) == 0.0
+
+
+def test_report_log_recomputes_if_asked_about_the_past() -> None:
+    log = ReportLog([Report(10.0, 0.0)])
+    assert log.faded(100.0, 50.0) == pytest.approx(math.exp(-2) / 10)
+    assert log.faded(50.0, 50.0) == pytest.approx(math.exp(-1) / 10)

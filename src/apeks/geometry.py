@@ -51,3 +51,47 @@ def closest_on_segment(p: Vec, a: Vec, b: Vec) -> Vec:
         return a
     t = max(0.0, min(1.0, dot(sub(p, a), ab) / denom))
     return add(a, scale(ab, t))
+
+
+class Grid[K]:
+    """Square buckets of side ``cell`` for finding points near each other.
+
+    Queries cost the points in nearby buckets instead of all points, so the
+    cell should be about the query radius.
+    """
+
+    def __init__(self, points: dict[K, Vec], cell: float) -> None:
+        self.points, self.cell = points, cell
+        self.order = {k: i for i, k in enumerate(points)}
+        self.buckets: dict[tuple[int, int], list[K]] = {}
+        for k, p in points.items():
+            self.buckets.setdefault(self._key(p), []).append(k)
+
+    def _key(self, p: Vec) -> tuple[int, int]:
+        return (math.floor(p[0] / self.cell), math.floor(p[1] / self.cell))
+
+    def near(self, centre: Vec, radius: float) -> list[K]:
+        """Keys within ``radius`` (inclusive) of ``centre``, in insertion order."""
+        reach = math.ceil(radius / self.cell)
+        cx, cy = self._key(centre)
+        found = [
+            k
+            for dx in range(-reach, reach + 1)
+            for dy in range(-reach, reach + 1)
+            for k in self.buckets.get((cx + dx, cy + dy), ())
+            if dist(self.points[k], centre) <= radius
+        ]
+        return sorted(found, key=self.order.__getitem__)
+
+    def pairs(self, radius: float) -> set[tuple[K, K]]:
+        """Pairs ``(a, b)`` with ``a < b`` closer than ``radius`` (exclusive)."""
+        reach = math.ceil(radius / self.cell)
+        out = set()
+        for (cx, cy), keys in self.buckets.items():
+            for dx in range(-reach, reach + 1):
+                for dy in range(-reach, reach + 1):
+                    for b in self.buckets.get((cx + dx, cy + dy), ()):
+                        for a in keys:
+                            if a < b and dist(self.points[a], self.points[b]) < radius:
+                                out.add((a, b))
+        return out

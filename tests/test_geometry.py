@@ -54,3 +54,26 @@ def test_closest_on_segment(point, expected) -> None:
 
 def test_closest_on_degenerate_segment() -> None:
     assert closest_on_segment((3.0, 3.0), (1.0, 1.0), (1.0, 1.0)) == (1.0, 1.0)
+
+
+def test_grid_finds_the_same_points_and_pairs_as_brute_force() -> None:
+    import random
+
+    from apeks.geometry import Grid
+
+    rng = random.Random(3)
+    pts = {f"v{i}": (rng.uniform(-50, 50), rng.uniform(-50, 50)) for i in range(80)}
+    pts["edge"] = (10.0, 0.0)
+    grid = Grid(pts, 10.0)
+    for centre in [(0.0, 0.0), (33.3, -12.0), (-60.0, 60.0)]:
+        want = [k for k, p in pts.items() if dist(p, centre) <= 10.0]
+        assert grid.near(centre, 10.0) == want  # insertion order kept
+    ids = sorted(pts)
+    want = {
+        (a, b)
+        for i, a in enumerate(ids)
+        for b in ids[i + 1 :]
+        if dist(pts[a], pts[b]) < 10.0
+    }
+    assert grid.pairs(10.0) == want
+    assert Grid({}, 1.0).pairs(1.0) == set() and Grid({}, 1.0).near((0, 0), 1) == []

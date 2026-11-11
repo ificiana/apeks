@@ -11,6 +11,7 @@ authors: a deterministic weighted score plus an explicit avoid-list.
 
 import math
 import random
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -29,7 +30,7 @@ class RouteOption:
     to_node: str
     estimate: float
     cost_to_go: float
-    reports: tuple[Report, ...] = ()
+    reports: Sequence[Report] = ()
 
 
 @dataclass(frozen=True)
@@ -53,12 +54,40 @@ class AcoParams:
     memory: float = bounded(400.0, 10.0, 5000.0, "time for a report to fade")
 
 
+class ReportLog(list[Report]):
+    """Lane reports in arrival order, with the faded sum kept up to date.
+
+    ``faded(now, m)`` is the sum over reports of exp(-(now - finished_at) / m)
+    / transit. For each ``m`` it keeps that sum at the time it was last asked
+    and how many reports it covers, so a later call only decays the total and
+    adds the reports that arrived since: O(new reports), not O(all reports).
+    """
+
+    def __init__(self, reports: Iterable[Report] = ()) -> None:
+        super().__init__(reports)
+        self._fade: dict[float, tuple[int, float, float]] = {}
+
+    def faded(self, now: float, memory: float) -> float:
+        count, at, total = self._fade.get(memory, (0, now, 0.0))
+        if now < at:
+            count, at, total = 0, now, 0.0
+        total *= math.exp(-(now - at) / memory)
+        for r in self[count:]:
+            total += math.exp(-(now - r.finished_at) / memory) / r.transit
+        self._fade[memory] = (len(self), now, total)
+        return total
+
+
 def pheromone(option: RouteOption, now: float, p: AcoParams) -> float:
     """Base level plus each report's speed-up over the estimate, fading with age."""
-    tau = p.tau0
-    for r in option.reports:
-        tau += option.estimate / r.transit * math.exp(-(now - r.finished_at) / p.memory)
-    return tau
+    reports = option.reports
+    if isinstance(reports, ReportLog):
+        faded = reports.faded(now, p.memory)
+    else:
+        faded = sum(
+            math.exp(-(now - r.finished_at) / p.memory) / r.transit for r in reports
+        )
+    return p.tau0 + option.estimate * faded
 
 
 class AcoRouting:
