@@ -239,7 +239,7 @@ Every channel has a physical path and a failure mode:
 | news | world → HQ | free-text items | publication delay, location/severity/forecast errors, false alarms, misses |
 | policy | HQ → ports → vessels | versioned policy | LLM latency 20, uplink 30, then notices and relay |
 
-**Radio.** Every vessel is a beacon. Delivery checks range, an independent 5% loss per receiver, and a bandwidth of 96 transmissions per tick per receiver neighbourhood. Excess transmissions are counted as overflow and dropped. Receivers estimate the sender's position with error that grows with distance. Neighbour queries use a spatial hash grid (`geometry.Grid`) with cells about the radio range.
+**Radio.** Every vessel is a beacon. Delivery checks range, an independent 5% loss per receiver, and a bandwidth of 96 deliveries per tick across the whole network. Excess transmissions are counted as overflow and dropped. Receivers estimate the sender's position with error that grows with distance. Neighbour queries use a spatial hash grid (`geometry.Grid`) with cells about the radio range.
 
 **Discovery.** A convoy observes only the lanes leaving the node it stands at.
 - If one is closed, or reopened, against its belief, the convoy updates its belief, counts a *blocked-lane discovery* and broadcasts a hazard.
@@ -537,7 +537,7 @@ Every seed gives every arm the same map, demand and hazards, so all comparisons 
 
 ## 11. Results on the classic map
 
-The five-port classic map has 15 ships, 6000 ticks, a storm at t = 1500–2500 and the strait closed at t = 3000–4000. The definitive numbers come from report 7 (50 seeds, demand 1.5×, about 456 packages generated per run). Reports 3–6 (11 seeds each) agree in direction.
+The five-port classic map in reports 1–7 had 16 ships (4 at north, 3 at each other port; the released `scenario.py` has 15, 3 per port), report 7 ran with `MAX_CONVOY = 8`, and reports 5–8 capped on-the-way loading at a detour of 0.25 of the direct leg. Each run lasts 6000 ticks, with a storm at t = 1500–2500 and the strait closed at t = 3000–4000. The definitive numbers come from report 7 (50 seeds, demand 1.5×, about 456 packages generated per run). Reports 3–6 (11 seeds each) agree in direction.
 
 ### 11.1 Headline (report 7, 50 seeds)
 
