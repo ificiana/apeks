@@ -1,6 +1,8 @@
 """Routing engines: which lane a convoy takes next from a node.
 
-Both engines read the same ``RouteObservation`` and return a lane id (or
+Both engines read the same ``RouteObservation``, which carries the policy the
+convoy holds (``params``; ``self.params`` is only the fleet's starting policy),
+and return a lane id (or
 ``None`` when no lane is passable). ``AcoRouting`` is ant colony optimisation:
 lane reports from other convoys act as pheromone that fades with age, mixed
 with a travel-time heuristic. ``ScoredRouting`` is the policy shape an LLM
@@ -10,6 +12,7 @@ authors: a deterministic weighted score plus an explicit avoid-list.
 import math
 import random
 from dataclasses import dataclass
+from typing import Any
 
 from apeks.policy import bounded, names
 
@@ -35,6 +38,7 @@ class RouteObservation:
     node: str
     destination: str
     options: tuple[RouteOption, ...]
+    params: Any  # the policy this convoy currently holds
 
 
 def _viable(obs: RouteObservation) -> list[RouteOption]:
@@ -66,9 +70,10 @@ class AcoRouting:
         viable = _viable(obs)
         if not viable:
             return None
+        p = obs.params
         weights = [
-            pheromone(o, obs.now, self.params) ** self.params.alpha
-            * (1.0 / (o.estimate + o.cost_to_go)) ** self.params.beta
+            pheromone(o, obs.now, p) ** p.alpha
+            * (1.0 / (o.estimate + o.cost_to_go)) ** p.beta
             for o in viable
         ]
         pick = self.rng.random() * sum(weights)
@@ -101,8 +106,7 @@ class ScoredRouting:
     def __init__(self, params: ScoredRouteParams) -> None:
         self.params = params
 
-    def _score(self, o: RouteOption, now: float) -> float:
-        p = self.params
+    def _score(self, o: RouteOption, now: float, p: ScoredRouteParams) -> float:
         recent = [
             r.transit for r in o.reports if now - r.finished_at <= p.report_horizon
         ]
@@ -115,4 +119,4 @@ class ScoredRouting:
         viable = _viable(obs)
         if not viable:
             return None
-        return min(viable, key=lambda o: self._score(o, obs.now)).lane
+        return min(viable, key=lambda o: self._score(o, obs.now, obs.params)).lane

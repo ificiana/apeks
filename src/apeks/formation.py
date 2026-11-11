@@ -8,6 +8,7 @@ formation whose shape and spacing are chosen, plus a minimum-gap safety rule.
 """
 
 from dataclasses import dataclass
+from typing import Any
 
 from apeks.geometry import (
     Vec,
@@ -40,6 +41,7 @@ class FormationObservation:
     slot_index: int
     convoy_size: int
     holding: bool
+    params: Any  # the policy this vessel's convoy currently holds
 
 
 def _goal_velocity(obs: FormationObservation) -> Vec:
@@ -74,7 +76,7 @@ class BoidsFormation:
         self.params = params
 
     def steer(self, obs: FormationObservation) -> Vec:
-        p = self.params
+        p = obs.params
         mates = [
             n
             for n in obs.neighbours
@@ -138,7 +140,7 @@ class SlotFormation:
         self.params = params
 
     def steer(self, obs: FormationObservation) -> Vec:
-        p = self.params
+        p = obs.params
         mates = [n.rel_pos for n in obs.neighbours if n.same_convoy]
         k = 1.0 / (len(mates) + 1)
         centre = scale((sum(m[0] for m in mates), sum(m[1] for m in mates)), k)

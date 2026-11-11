@@ -7,6 +7,7 @@ messages therefore carry no positions of their own.
 
 import random
 from dataclasses import dataclass, field
+from typing import Any
 
 from apeks.geometry import Vec, dist, sub
 
@@ -31,16 +32,34 @@ class LaneReport:
 
 
 @dataclass(frozen=True)
-class Notice:
-    """A port station's navigation notice that a lane is closed or open."""
+class Hazard:
+    """``origin`` saw ``lane`` closed (or open) at ``observed_at``.
+
+    Convoys send one when their own eyes disagree with what they believed;
+    port stations repeat the hazards they have heard; ships relay new ones.
+    ``hops`` counts relays since the origin or the last port station.
+    """
 
     sender: str
     lane: str
     closed: bool
-    text: str
+    observed_at: float
+    origin: str
+    hops: int = 0
 
 
-type Message = PositionReport | LaneReport | Notice
+@dataclass(frozen=True)
+class PolicyMsg:
+    """A versioned policy from HQ, sent by port stations and relayed by ships."""
+
+    sender: str
+    module: str
+    version: int
+    params: Any
+    hops: int = 0
+
+
+type Message = PositionReport | LaneReport | Hazard | PolicyMsg
 
 
 @dataclass(frozen=True)
@@ -57,12 +76,23 @@ class Radio:
     bandwidth: int
     noise: float
     stats: dict[str, int] = field(
-        default_factory=lambda: {"sent": 0, "delivered": 0, "lost": 0, "overflow": 0}
+        default_factory=lambda: {
+            "sent": 0,
+            "delivered": 0,
+            "lost": 0,
+            "overflow": 0,
+            "relayed": 0,
+        }
     )
+    by_type: dict[str, int] = field(default_factory=dict)
     _queue: list[tuple[Message, Vec]] = field(default_factory=list)
 
     def broadcast(self, message: Message, origin: Vec) -> None:
         self.stats["sent"] += 1
+        kind = type(message).__name__
+        self.by_type[kind] = self.by_type.get(kind, 0) + 1
+        if getattr(message, "hops", 0) > 0:
+            self.stats["relayed"] += 1
         self._queue.append((message, origin))
 
     def deliver(self, receivers: dict[str, Vec]) -> dict[str, list[Received]]:

@@ -1,5 +1,6 @@
 import math
 import random
+from dataclasses import replace
 
 import pytest
 
@@ -19,8 +20,13 @@ def opt(lane, est, ctg=0.0, reports=()) -> RouteOption:
     return RouteOption(lane, lane[-1], est, ctg, tuple(reports))
 
 
-def obs(*options, now=100.0) -> RouteObservation:
-    return RouteObservation(now, "A", "B", tuple(options))
+def choose(engine, o: RouteObservation) -> str | None:
+    """Choose with the engine's own parameters, as a convoy holding them would."""
+    return engine.choose(replace(o, params=engine.params))
+
+
+def obs(*options, now=100.0, params=None) -> RouteObservation:
+    return RouteObservation(now, "A", "B", tuple(options), params)
 
 
 def test_pheromone_rises_with_fast_recent_reports_and_fades() -> None:
@@ -38,16 +44,16 @@ def test_aco_prefers_reinforced_lane_probabilistically() -> None:
         opt("A>X", 50.0, 50.0, [Report(40.0, 99.0)] * 3),
         opt("A>Y", 50.0, 50.0),
     )
-    picks = [engine.choose(o) for _ in range(200)]
+    picks = [choose(engine, o) for _ in range(200)]
     assert picks.count("A>X") > 150
     assert "A>Y" in picks
 
 
 def test_aco_skips_impassable_and_returns_none_without_options() -> None:
     engine = AcoRouting(AcoParams(), random.Random(0))
-    assert engine.choose(obs(opt("A>X", math.inf), opt("A>Y", 10.0))) == "A>Y"
-    assert engine.choose(obs(opt("A>X", math.inf))) is None
-    assert engine.choose(obs()) is None
+    assert choose(engine, obs(opt("A>X", math.inf), opt("A>Y", 10.0))) == "A>Y"
+    assert choose(engine, obs(opt("A>X", math.inf))) is None
+    assert choose(engine, obs()) is None
 
 
 def test_aco_falls_back_to_last_option_on_rounding() -> None:
@@ -56,16 +62,16 @@ def test_aco_falls_back_to_last_option_on_rounding() -> None:
             return 1.0
 
     engine = AcoRouting(AcoParams(), Max())
-    assert engine.choose(obs(opt("A>X", 10.0), opt("A>Y", 10.0))) == "A>Y"
+    assert choose(engine, obs(opt("A>X", 10.0), opt("A>Y", 10.0))) == "A>Y"
 
 
 def test_scored_routing_is_deterministic_and_obeys_avoid_list() -> None:
     engine = ScoredRouting(ScoredRouteParams())
     o = obs(opt("A>X", 10.0, 10.0), opt("A>Y", 12.0, 10.0))
-    assert engine.choose(o) == "A>X"
+    assert choose(engine, o) == "A>X"
     engine.params = ScoredRouteParams(avoid=("A>X",))
-    assert engine.choose(o) == "A>Y"
-    assert engine.choose(obs(opt("A>X", math.inf))) is None
+    assert choose(engine, o) == "A>Y"
+    assert choose(engine, obs(opt("A>X", math.inf))) is None
 
 
 def test_scored_routing_uses_recent_reports_only() -> None:
@@ -73,5 +79,5 @@ def test_scored_routing_uses_recent_reports_only() -> None:
     slow = opt("A>X", 10.0, 10.0, [Report(40.0, 90.0)])
     stale = opt("A>X", 10.0, 10.0, [Report(40.0, 10.0)])
     other = opt("A>Y", 15.0, 10.0)
-    assert engine.choose(obs(slow, other)) == "A>Y"
-    assert engine.choose(obs(stale, other)) == "A>X"
+    assert choose(engine, obs(slow, other)) == "A>Y"
+    assert choose(engine, obs(stale, other)) == "A>X"
