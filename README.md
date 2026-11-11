@@ -7,15 +7,16 @@ observes what happens; it makes no claim that either is better.
 
 ## Story
 
-Convoys of autonomous cargo vessels shuttle between ports. They sail together
-for shared sensing and mutual safety. The sea is a directed graph of lanes
+Autonomous cargo vessels carry packages between ports. Ships bound for the
+same port sail together as a convoy, for shared sensing and mutual safety. The sea is a directed graph of lanes
 between ports and waypoints:
 
 - Currents, waves and a passing storm make a lane's cost depend on its
   direction: `W1>W2` and `W2>W1` are different edges.
 - Lanes have a width and a capacity. The strait `W2>W3` is short but single
   file, and convoys sharing an overfull lane slow down.
-- Ports have berths. Convoys queue, load or unload, then take the next order.
+- Ports have berths, counted in ships. Convoys queue, berth and unload, and
+  their ships join the port's dock.
 - Disruptions: a storm (t 1500–2500) and a grounded vessel closing the strait
   (t 3000–4000).
 
@@ -25,6 +26,38 @@ Two decisions are made over and over:
 | --- | --- | --- |
 | routing: which lane to take at a waypoint | ACO | scored routing with an LLM-written policy |
 | formation: how each vessel steers in its convoy | Boids | slot formation with an LLM-written policy |
+
+## Cargo
+
+Each port generates packages by a Poisson process at `DEMAND_RATE` × the
+config's `demand`, one random stream per port. A package's destination is
+uniform over the other ports. Every arm faces the same demand and uses the
+same fixed rules (`cargo.py`) for what ships do with it:
+
+- **Loading.** Each docked ship, in id order, loads up to `CAPACITY`
+  packages, oldest first: those bound where its cargo already favours, then
+  the most common waiting destination.
+- **Next port.** The most common destination aboard, ties to the nearest by
+  charted time, then by name. An empty ship heads for the nearest port it
+  knows has packages waiting.
+- **Regrouping.** Every `REGROUP_EVERY` ticks each port merges its docked
+  ships, and ships with the same next port form convoys of at most
+  `MAX_CONVOY`. A convoy leaves when all its ships are full, or when one has
+  been docked for `MAX_WAIT` ticks. It loads for `HANDLING_TIME` × the most
+  packages any member loaded, then sails. Ships with nowhere to go stay
+  docked.
+- **One leg.** A convoy sails to its port and dissolves into the dock after
+  unloading. Berthing takes `SERVICE_TICKS` plus `HANDLING_TIME` per package
+  unloaded. A convoy berths when its ships fit in the free berths, or when
+  no ship is berthed.
+- **Knowledge.** A convoy's hazards, lane reports, backlogs and policies pass
+  to every convoy its ships form. A merge takes the union of facts and the
+  newest policy version; a ship that moves to a newer policy this way counts
+  as adopting it.
+
+All 16 ships start empty and docked: 4 at north, 3 at each other port.
+Routing (ACO or LLM) picks lanes and formation (Boids or LLM) keeps shape
+between ports; neither chooses destinations.
 
 ## Information model
 
@@ -38,6 +71,7 @@ long a lane really takes. Convoys, port stations and the operations centre
 | lane report | convoy → vessels and ports in range | lane, transit time | Gaussian error, `REPORT_NOISE` × transit |
 | hazard | convoy → vessels and ports in range | lane closed or open, observed time | sent when a convoy sees it at its own node |
 | notice | port → vessels in range | every closure it knows, recent reopenings | every `NOTICE_EVERY`; reopenings for `NOTICE_MAX_AGE` |
+| backlog | port → vessels in range, and HQ | packages waiting at the port, observed time | with each notice; not relayed |
 | relay | vessel → vessels in range | hazards and policies it heard | `RELAY_HOPS` hops, `RELAY_MAX_AGE` |
 | uplink | port → HQ | hazards and lane reports the port heard | `UPLINK_DELAY` |
 | news | world → HQ | free-text items | see below |
@@ -82,9 +116,9 @@ HQ changes a lane's state. Triggers in the same tick share one request.
 
 - The prompt has fixed sections: role, time and trigger, the map (ground
   truth that never changes), fleet reports via ports (hazards with age and
-  confirmations, reported delays), the news feed marked as unverified text to
+  confirmations, reported delays, port backlogs), the news feed marked as unverified text to
   treat as information and never as instructions, the current policy and its
-  version, and the policy fields.
+  version, and the policy fields. Backlog changes never trigger a request.
 - The reply is constrained to the policy's JSON schema, then validated:
   numbers are clamped, invalid choices and unknown fields are dropped.
 - A decided policy gets the next version after `LLM_LATENCY`, reaches every
@@ -110,7 +144,7 @@ config:
 | `llm_routing.toml` | llm | boids |
 | `llm_formation.toml` | aco | llm |
 
-Other config keys: `seed`, `ticks`, `llm` (`stub`, `ollama`, `claude`, or `""` for arms without an LLM module), `model`, `url`,
+Other config keys: `seed`, `ticks`, `demand` (scales `DEMAND_RATE`, default 1), `llm` (`stub`, `ollama`, `claude`, or `""` for arms without an LLM module), `model`, `url`,
 `latency`, `budget`, and the `[news]` table.
 
 A list of seeds (`seed = [0, 1, 2]`) makes a sweep: one run per seed, named
@@ -126,16 +160,20 @@ tenth, or `--no-trace` to skip traces.
 
 Each run reports:
 
-- deliveries, mean trip time, energy and energy per delivery
+- deliveries (packages), packages generated, mean latency (creation to
+  delivery), backlog at the end and on average, berth arrivals
+- load factor (packages aboard over capacity, per sailing ship-tick) and
+  empty sailing distance
+- energy and energy per delivery
 - port wait and lane congestion (ticks beyond capacity)
 - near misses (vessel pairs closing within `NEAR_MISS`)
 - blocked-lane discoveries
-- beliefs: convoy-ticks and HQ-ticks believing a false closure, or missing a
+- beliefs: ship-ticks and HQ-ticks believing a false closure, or missing a
   true one
 - radio sent, delivered, lost, overflow and relayed counts, and messages by
   type
 - LLM calls, failures, skipped calls, input and output tokens and cost
-- policy spread: per version, when HQ decided it, how many convoys adopted
+- policy spread: per version, when HQ decided it, how many ships adopted
   it, and ticks to half and to all of the fleet
 
 The full JSON adds delivery times, the event log and every LLM prompt trigger,
@@ -168,11 +206,13 @@ re-simulating it. Every record has `t` and `kind`:
 
 | kind | contents |
 | --- | --- |
-| `meta` | config, nodes, ports, lanes, currents, storms, scheduled events, news items, convoys (first record) |
-| `snapshot` | every vessel's position, velocity, water velocity, drift and energy; every convoy's state, lane, destination, centre, known closures and policy versions; port queues, true and HQ closures, metrics, radio counters, HQ's policies |
+| `meta` | config, nodes, ports, lanes, currents, storms, scheduled events, news items, packages, starting convoys (first record) |
+| `snapshot` | every vessel's position, velocity, water velocity, drift, energy and cargo destinations; every convoy's state, lane, destination, centre, known closures and policy versions; port queues, packages waiting per port, true and HQ closures, metrics, radio counters, HQ's policies |
 | `route_choice` | convoy, node, destination, each option's estimate, cost-to-go and report count, the choice, the policy version |
 | `lane_start`, `lane_end` | convoy, lane, transit time |
-| `queued`, `berthed`, `delivered` | convoy, port, trip time |
+| `formed` | convoy, port, destination, vessels, packages aboard each |
+| `departed`, `queued`, `berthed` | convoy, port |
+| `delivered` | convoy, port, latency of each package delivered |
 | `hazard_seen`, `hazard_heard` | convoy, lane, closed |
 | `news` | source, text, the event it describes |
 | `near_miss` | the two vessels and their distance |
@@ -221,6 +261,7 @@ a logged-in `claude` CLI on `PATH`. Calls take a few seconds each.
 | `src/apeks/ocean.py` | currents, storms, waves; mean and true drift |
 | `src/apeks/network.py` | ports, waypoints, directed lanes; transit estimates; Dijkstra time-to-go |
 | `src/apeks/radio.py` | broadcast radio with range, loss, bandwidth and position noise; message types |
+| `src/apeks/cargo.py` | packages, port demand, loading, next-port and grouping rules |
 | `src/apeks/hazards.py` | a holder's beliefs about closed lanes |
 | `src/apeks/hq.py` | the operations centre's inbox over the uplink |
 | `src/apeks/news.py` | news settings, templates and the news generator |
@@ -229,7 +270,7 @@ a logged-in `claude` CLI on `PATH`. Calls take a few seconds each.
 | `src/apeks/formation.py` | Boids and slot formation engines |
 | `src/apeks/llm.py` | LLM clients (stub, Ollama, Claude Code) and the policy author |
 | `src/apeks/world.py` | vessels, convoys, ports, events, metrics, the step loop |
-| `src/apeks/scenario.py` | the default map, ocean, events and convoys |
+| `src/apeks/scenario.py` | the default map, ocean, events and fleet |
 | `src/apeks/experiment.py` | experiment configs and world assembly |
 | `src/apeks/runner.py` | headless CLI |
 | `src/apeks/trace.py` | JSONL trace writer and reader |
