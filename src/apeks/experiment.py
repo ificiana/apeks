@@ -2,7 +2,7 @@
 
 import random
 import tomllib
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, fields, replace
 from pathlib import Path
 from typing import Any
 
@@ -61,13 +61,23 @@ class ExperimentConfig:
             raise ValueError(f"{self.name}: an llm module needs an llm backend")
 
 
-def load_config(path: Path) -> ExperimentConfig:
+def load_configs(path: Path) -> list[ExperimentConfig]:
+    """One config per run; a list of seeds expands to ``<name>_s<seed>`` runs."""
     data: dict[str, Any] = tomllib.loads(path.read_text())
     known = {f.name for f in fields(ExperimentConfig)}
     unknown = set(data) - known
     if unknown:
         raise ValueError(f"unknown keys in {path}: {sorted(unknown)}")
-    return ExperimentConfig(**data)
+    seeds = data.get("seed", 0)
+    if not isinstance(seeds, list):
+        return [ExperimentConfig(**data)]
+    base = ExperimentConfig(**{k: v for k, v in data.items() if k != "seed"})
+    return [replace(base, seed=seed, name=f"{base.name}_s{seed}") for seed in seeds]
+
+
+def load_config(path: Path) -> ExperimentConfig:
+    """The first run of a config file."""
+    return load_configs(path)[0]
 
 
 def make_client(cfg: ExperimentConfig) -> LlmClient:

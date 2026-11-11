@@ -4,7 +4,13 @@ from pathlib import Path
 import pytest
 
 from apeks import runner, scenario
-from apeks.experiment import ExperimentConfig, build_world, load_config, make_client
+from apeks.experiment import (
+    ExperimentConfig,
+    build_world,
+    load_config,
+    load_configs,
+    make_client,
+)
 from apeks.formation import BoidsFormation, SlotFormation
 from apeks.llm import OllamaClient, StubClient
 from apeks.routing import AcoRouting, ScoredRouting
@@ -48,7 +54,30 @@ def test_config_validation_and_loading(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="colour"):
         load_config(bad)
     arms = {load_config(p).name for p in ARMS.glob("*.toml")}
-    assert arms == {"classical", "llm", "llm_routing", "llm_formation"}
+    assert arms >= {"classical", "llm", "llm_routing", "llm_formation"}
+
+
+def test_seed_list_expands_to_one_config_per_seed(tmp_path: Path) -> None:
+    sweep = tmp_path / "sweep.toml"
+    sweep.write_text('name = "arm"\nseed = [0, 2]\nticks = 5\n')
+    cfgs = load_configs(sweep)
+    assert [(c.name, c.seed, c.ticks) for c in cfgs] == [
+        ("arm_s0", 0, 5),
+        ("arm_s2", 2, 5),
+    ]
+    assert load_config(sweep) == cfgs[0]
+    single = tmp_path / "single.toml"
+    single.write_text('name = "one"\nseed = 3\n')
+    assert [(c.name, c.seed) for c in load_configs(single)] == [("one", 3)]
+
+
+def test_sweep_arms_cover_seeds_0_to_10() -> None:
+    for name in ["classical", "llm", "llm_routing", "llm_formation"]:
+        cfgs = load_configs(ARMS / f"{name}_sweep.toml")
+        assert [c.seed for c in cfgs] == list(range(11))
+        assert cfgs[0].name == f"{name}_s0"
+        base = load_config(ARMS / f"{name}.toml")
+        assert cfgs[0] == base.__class__(**{**base.__dict__, "name": f"{name}_s0"})
 
 
 def test_make_client_picks_backend() -> None:
@@ -72,7 +101,9 @@ def test_cli_saves_out_and_trace_per_arm_under_logs(
     monkeypatch.setattr(runner, "timestamp", lambda: "20261111-070000")
     args = [str(ARMS / "classical.toml"), str(ARMS / "llm.toml")]
     assert (
-        runner.main([*args, "--ticks", "3", "--llm", "stub", "--snapshot-every", "2"])
+        runner.main(
+            [*args, "--ticks", "3", "--llm", "stub", "--snapshot-every", "2", "-j1"]
+        )
         == 0
     )
     lines = [json.loads(x) for x in capsys.readouterr().out.splitlines()]
@@ -99,6 +130,20 @@ def test_cli_logs_dir_and_no_trace(tmp_path, capsys) -> None:
     assert json.loads(capsys.readouterr().out)["ticks"] == 2
     [saved] = list(out.iterdir())
     assert saved.name.startswith("out_short_") and saved.suffix == ".json"
+
+
+def test_cli_runs_sweep_in_parallel_in_seed_order(tmp_path, capsys) -> None:
+    sweep = tmp_path / "sweep.toml"
+    sweep.write_text('name = "sw"\nseed = [0, 1, 2]\nticks = 2\n')
+    out = tmp_path / "logs"
+    args = [str(sweep), "--logs", str(out), "--no-trace"]
+    assert runner.main([*args, "--jobs", "3"]) == 0
+    parallel = [json.loads(x) for x in capsys.readouterr().out.splitlines()]
+    assert [x["name"] for x in parallel] == ["sw_s0", "sw_s1", "sw_s2"]
+    assert len(list(out.iterdir())) == 3
+    assert runner.main([*args, "--jobs", "1"]) == 0
+    serial = [json.loads(x) for x in capsys.readouterr().out.splitlines()]
+    assert serial == parallel
 
 
 def test_timestamp_is_sortable_local_time() -> None:
