@@ -42,7 +42,8 @@ Ships carry packages, and packages decide where ships go. In report 3, each conv
 | name | value | meaning |
 | --- | ---: | --- |
 | `CAPACITY` | 4 | packages per ship |
-| `MAX_CONVOY` | 8 | ships per convoy |
+| `BERTHS` | 4 | berths per port, counted in ships |
+| `MAX_CONVOY` | `BERTHS` | ships per convoy; a full convoy fits an empty port |
 | `HANDLING_TIME` | 5 | ticks per package loaded or unloaded |
 | `REGROUP_EVERY` | 10 | ticks between port regroupings |
 | `MAX_WAIT` | 100 | most ticks a docked ship waits before a partly full convoy sails |

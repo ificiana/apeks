@@ -1,5 +1,6 @@
 """The default sea: five ports, sixteen ships, a strait, two currents, a storm."""
 
+from apeks import config
 from apeks.network import SeaNetwork
 from apeks.ocean import Current, Ocean, Storm
 from apeks.world import Event
@@ -18,7 +19,7 @@ def network() -> SeaNetwork:
         "east": (920.0, 380.0),
         "ne": (800.0, 90.0),
     }.items():
-        net.add_port(name, pos, berths=4)  # berths count ships
+        net.add_port(name, pos, berths=config.BERTHS)
     for name, pos in {
         "W1": (300.0, 300.0),
         "W2": (520.0, 330.0),
