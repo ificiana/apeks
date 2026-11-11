@@ -507,3 +507,42 @@ def test_convoy_absorbs_knowledge_and_hears_backlogs() -> None:
     assert a.backlogs == {"Q": (7, 9.0), "R": (1, 0.0)}
     k = a.knowledge()
     assert k["backlogs"] == a.backlogs and k["backlogs"] is not a.backlogs
+
+
+def via_net() -> SeaNetwork:
+    """P → M → Q in a row, M a port on the way, and R far off to the side."""
+    net = SeaNetwork()
+    for name, x, y in [("P", 0.0, 0.0), ("M", 100.0, 0.0), ("Q", 200.0, 0.0)]:
+        net.add_port(name, (x, y), berths=4)
+    net.add_port("R", (0.0, 400.0), berths=4)
+    net.add_channel("P", "M", width=40.0, capacity=2)
+    net.add_channel("M", "Q", width=40.0, capacity=2)
+    net.add_channel("P", "R", width=40.0, capacity=2)
+    return net
+
+
+def test_regroup_loads_packages_for_ports_on_the_way_only() -> None:
+    pkgs = [
+        Package("P#0", "P", "Q", 0.0),
+        Package("P#1", "P", "Q", 0.0),
+        Package("P#2", "P", "R", 0.0),
+        Package("P#3", "P", "M", 0.0),
+    ]
+    world = make_world(via_net(), [("a", ("P",), 1)], packages=pkgs)
+    world.vessels["a.0"].docked_since = -config.MAX_WAIT
+    world.step()
+    (convoy,) = world.convoys.values()
+    assert sorted(p.id for p in world.vessels["a.0"].cargo) == ["P#0", "P#1", "P#3"]
+    assert [p.id for p in world.waiting["P"]] == ["P#2"]
+    assert convoy.destination == "Q"
+
+
+def test_convoy_stops_at_a_port_on_the_way_with_cargo_for_it() -> None:
+    world = make_world(via_net(), [("a", ("P", "Q"), 1), ("b", ("P", "Q"), 1)])
+    world.vessels["a.0"].cargo = [Package("P#0", "P", "M", 0.0)]
+    for _ in range(400):
+        world.step()
+        if world.metrics["deliveries"]:
+            break
+    assert world.metrics["latencies"] and world.convoys["a"].node == "M"
+    assert world.convoys["b"].node == "Q" or world.convoys["b"].destination == "Q"

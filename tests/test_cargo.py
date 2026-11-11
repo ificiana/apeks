@@ -1,6 +1,15 @@
 import math
 
-from apeks.cargo import Package, generate_demand, group, load, mode_port, next_port
+from apeks.cargo import (
+    Package,
+    detours,
+    generate_demand,
+    group,
+    load,
+    mode_port,
+    next_port,
+    target_port,
+)
 
 TIMES = {"A": 0.0, "B": 10.0, "C": 20.0, "D": math.inf}
 
@@ -34,19 +43,33 @@ def test_mode_port_breaks_ties_by_time_then_name() -> None:
     assert mode_port([], TIMES) is None
 
 
-def test_load_prefers_cargo_destination_then_most_common_waiting() -> None:
-    waiting = [pkg("C", 0), pkg("B", 0), pkg("C", 1), pkg("B", 1), pkg("B", 2)]
-    cargo = [pkg("C", 9)]
-    got = load(cargo, 4, waiting, TIMES)
-    assert [p.destination for p in got] == ["C", "C", "B"]
-    assert [p.destination for p in cargo] == ["C", "C", "C", "B"]
-    assert [p.id for p in waiting] == ["A#B1", "A#B2"]
-    empty: list[Package] = []
-    assert [p.destination for p in load(empty, 2, waiting, TIMES)] == ["B", "B"]
-    assert waiting == []
-    assert load(empty, 2, waiting, TIMES) == []
-    full = [pkg("B", i) for i in range(2)]
-    assert load(full, 2, [pkg("C")], TIMES) == []
+def test_target_is_cargo_mode_else_most_common_waiting() -> None:
+    assert target_port([pkg("C"), pkg("B"), pkg("C")], [pkg("B")], TIMES) == "C"
+    assert target_port([], [pkg("C"), pkg("B"), pkg("C")], TIMES) == "C"
+    assert target_port([], [], TIMES) is None
+
+
+def test_detours_measure_extra_time_via_each_port() -> None:
+    here = {"A": 0.0, "B": 10.0, "C": 4.0, "D": 20.0}
+    to_b = {"A": 10.0, "B": 0.0, "C": 6.0, "D": 15.0}
+    assert detours(here, to_b, "B") == {"A": 0.0, "B": 0.0, "C": 0.0, "D": 25.0}
+    assert detours(here, {"A": 10.0}, "B")["C"] == math.inf
+    cut_off = {"A": 0.0, "B": math.inf, "C": 4.0}
+    assert detours(cut_off, to_b, "B") == {"A": math.inf, "B": 0.0, "C": math.inf}
+
+
+def test_load_takes_target_then_cheapest_detours_within_cap() -> None:
+    waiting = [pkg("D", 0), pkg("C", 0), pkg("B", 0), pkg("D", 1), pkg("E", 0)]
+    det = {"B": 0.0, "C": 1.0, "D": 1.0, "E": 50.0}
+    cargo = [pkg("B", 9)]
+    got = load(cargo, 4, waiting, "B", det, 5.0)
+    assert [p.destination for p in got] == ["B", "D", "D"]
+    assert [p.id for p in waiting] == ["A#C0", "A#E0"]
+    roomy: list[Package] = []
+    assert [p.destination for p in load(roomy, 9, waiting, "B", det, 5.0)] == ["C"]
+    assert [p.id for p in waiting] == ["A#E0"]
+    assert load([pkg("B", i) for i in range(2)], 2, [pkg("B")], "B", det, 5.0) == []
+    assert load([], 2, [pkg("Z")], "B", det, 5.0) == []
 
 
 def test_next_port_from_cargo_or_known_backlog() -> None:

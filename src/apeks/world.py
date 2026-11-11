@@ -24,7 +24,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
 
 from apeks import config
-from apeks.cargo import Package, group, load, next_port
+from apeks.cargo import Package, detours, group, load, next_port, target_port
 from apeks.formation import FormationObservation, Neighbour
 from apeks.geometry import (
     Vec,
@@ -615,6 +615,11 @@ class World:
                 convoy.hear(LaneReport(lead, lane.id, transit, self.t), self.t)
                 self._emit("lane_end", convoy=convoy.id, lane=lane.id, transit=transit)
                 convoy.node, convoy.lane = lane.b, None
+                if convoy.node != convoy.destination and self._delivers_at(
+                    convoy, convoy.node
+                ):
+                    convoy.destination = convoy.node
+                    self._emit("stopover", convoy=convoy.id, port=convoy.node)
             if convoy.node == convoy.destination:
                 convoy.state = "queued"
                 self.queues.setdefault(convoy.node, []).append(convoy.id)
@@ -644,6 +649,12 @@ class World:
                 continue
             convoy.lane, convoy.lane_started = choice, self.t
             self._emit("lane_start", convoy=convoy.id, lane=choice)
+
+    def _delivers_at(self, convoy: Convoy, node: str) -> bool:
+        """Whether ``node`` is a port some member has packages for."""
+        return node in self.network.ports and any(
+            p.destination == node for v in convoy.vessels for p in self.vessels[v].cargo
+        )
 
     def _ports(self) -> None:
         for port, berths in self.network.ports.items():
@@ -717,7 +728,22 @@ class World:
         backlogs = {p: n for p, (n, _) in pool.backlogs.items()}
         for vid in ships:
             v = self.vessels[vid]
-            v.loaded_here += len(load(v.cargo, v.capacity, self.waiting[port], times))
+            target = target_port(v.cargo, self.waiting[port], times)
+            if target is None:
+                continue
+            to_target = self.network.times_to(
+                target, self.ocean, self.t, self.cruise(), pool.known_closed
+            )
+            v.loaded_here += len(
+                load(
+                    v.cargo,
+                    v.capacity,
+                    self.waiting[port],
+                    target,
+                    detours(times, to_target, target),
+                    config.DETOUR_FRACTION * times[target],
+                )
+            )
         plans = [
             (vid, next_port(self.vessels[vid].cargo, port, times, backlogs))
             for vid in ships

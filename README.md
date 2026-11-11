@@ -34,9 +34,13 @@ config's `demand`, one random stream per port. A package's destination is
 uniform over the other ports. Every arm faces the same demand and uses the
 same fixed rules (`cargo.py`) for what ships do with it:
 
-- **Loading.** Each docked ship, in id order, loads up to `CAPACITY`
-  packages, oldest first: those bound where its cargo already favours, then
-  the most common waiting destination.
+- **Loading.** Each docked ship, in id order, picks a target: the most
+  common destination aboard, or the most common waiting destination if it is
+  empty. It loads up to `CAPACITY` packages, oldest first: those for the
+  target, then those for ports it can call at on the way. A port's detour is
+  the extra charted time to sail here → port → target instead of here →
+  target. Ports are taken cheapest detour first, and only while the detour is
+  at most `DETOUR_FRACTION` of the direct time.
 - **Next port.** The most common destination aboard, ties to the nearest by
   charted time, then by name. An empty ship heads for the nearest port it
   knows has packages waiting.
@@ -47,7 +51,9 @@ same fixed rules (`cargo.py`) for what ships do with it:
   packages any member loaded, then sails. Ships with nowhere to go stay
   docked.
 - **One leg.** A convoy sails to its port and dissolves into the dock after
-  unloading. Berthing takes `SERVICE_TICKS` plus `HANDLING_TIME` per package
+  unloading. If it reaches another port first where a member has packages
+  to deliver, that port becomes its destination: it berths and unloads
+  there, and the ships regroup. Berthing takes `SERVICE_TICKS` plus `HANDLING_TIME` per package
   unloaded. A convoy berths when its ships fit in the free berths, or when
   no ship is berthed.
 - **Knowledge.** A convoy's hazards, lane reports, backlogs and policies pass
@@ -212,6 +218,7 @@ re-simulating it. Every record has `t` and `kind`:
 | `lane_start`, `lane_end` | convoy, lane, transit time |
 | `formed` | convoy, port, destination, vessels, packages aboard each |
 | `departed`, `queued`, `berthed` | convoy, port |
+| `stopover` | convoy, the port on the way it will stop at |
 | `delivered` | convoy, port, latency of each package delivered |
 | `hazard_seen`, `hazard_heard` | convoy, lane, closed |
 | `news` | source, text, the event it describes |

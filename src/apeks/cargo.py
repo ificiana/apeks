@@ -1,7 +1,9 @@
 """Packages, port demand and the fixed heuristics that give ships a purpose.
 
 Every arm uses these same rules: which waiting packages a ship loads, which
-port it sails for next, and how ships at a port group into convoys.
+port it sails for next, and how ships at a port group into convoys. A ship
+loads for one target port, plus ports that cost little extra to call at on
+the way.
 """
 
 import math
@@ -48,25 +50,52 @@ def mode_port(ports: list[str], times: dict[str, float]) -> str | None:
     return min(counts, key=lambda p: (-counts[p], times.get(p, math.inf), p))
 
 
+def target_port(
+    cargo: list[Package], waiting: list[Package], times: dict[str, float]
+) -> str | None:
+    """The port a ship loads for: its cargo's port, else the busiest waiting one."""
+    return mode_port([p.destination for p in cargo], times) or mode_port(
+        [p.destination for p in waiting], times
+    )
+
+
+def detours(
+    from_here: dict[str, float], to_target: dict[str, float], target: str
+) -> dict[str, float]:
+    """Extra charted time to call at each port on the way to ``target``.
+
+    Infinite for every other port when ``target`` cannot be reached.
+    """
+    direct = from_here[target]
+    if direct == math.inf:
+        return {x: 0.0 if x == target else math.inf for x in from_here}
+    return {x: from_here[x] + to_target.get(x, math.inf) - direct for x in from_here}
+
+
 def load(
     cargo: list[Package],
     capacity: int,
     waiting: list[Package],
-    times: dict[str, float],
+    target: str,
+    detour: dict[str, float],
+    max_detour: float,
 ) -> list[Package]:
     """Move packages from ``waiting`` into ``cargo``, oldest first.
 
-    First those bound where the cargo already favours, then the most common
-    waiting destination, until the ship is full or nothing waits.
+    First those for ``target``, then those for other ports in order of
+    cheapest detour (ties: most waiting, then name), skipping any port whose
+    detour exceeds ``max_detour``.
     """
+    counts = Counter(p.destination for p in waiting)
+    order = sorted(
+        (d for d in counts if d != target and detour.get(d, math.inf) <= max_detour),
+        key=lambda d: (detour[d], -counts[d], d),
+    )
     loaded: list[Package] = []
-    while len(cargo) < capacity and waiting:
-        target = mode_port([p.destination for p in cargo], times)
-        if target is None or not any(p.destination == target for p in waiting):
-            target = mode_port([p.destination for p in waiting], times)
-        for p in [p for p in waiting if p.destination == target]:
+    for dest in [target, *order]:
+        for p in [p for p in waiting if p.destination == dest]:
             if len(cargo) == capacity:
-                break
+                return loaded
             waiting.remove(p)
             cargo.append(p)
             loaded.append(p)
