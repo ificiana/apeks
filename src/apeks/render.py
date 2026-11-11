@@ -450,3 +450,11 @@ def _draw_bar(surface, rect, world: World, fonts, cam: Camera, ui: Ui) -> None:
     )
     label = fonts["s"].render(text, True, MUTED)
     surface.blit(label, (rect.x + 12, rect.centery - label.get_height() / 2))
+
+
+def draw_waiting(surface: pygame.Surface, fonts: dict[str, pygame.font.Font]) -> None:
+    """Banner over the last frame while the world is busy (an LLM call)."""
+    label = fonts["m"].render("waiting for the LLM...", True, TEXT)
+    box = label.get_rect(midtop=(surface.get_width() // 2, 12)).inflate(24, 12)
+    pygame.draw.rect(surface, CARD, box, border_radius=6)
+    surface.blit(label, label.get_rect(center=box.center))

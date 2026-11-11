@@ -22,13 +22,6 @@ from apeks.render import (
 )
 
 
-@pytest.fixture
-def fonts():
-    pygame.init()
-    yield {s: pygame.font.Font(None, n) for s, n in (("s", 15), ("m", 18), ("l", 30))}
-    pygame.quit()
-
-
 def test_camera_maps_both_ways_and_zooms_about_the_cursor() -> None:
     cam = Camera(view=(10, 20, 400, 300))
     cam.fit(800.0, 600.0)
