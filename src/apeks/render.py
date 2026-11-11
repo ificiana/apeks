@@ -1,13 +1,16 @@
-"""The dashboard: a pan-and-zoom map, a side panel of figures and a status bar."""
+"""The dashboard: run controls, a pan-and-zoom map, a panel of figures, a bar."""
 
 import math
 from collections import deque
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from functools import lru_cache
+from typing import Any
 
 import pygame
 
+from apeks.controls import Spec, get, show, specs
+from apeks.experiment import ExperimentConfig
 from apeks.geometry import Vec, add, normalize, scale
 from apeks.mapgen import Geography
 from apeks.world import World
@@ -34,6 +37,19 @@ GOOD, WARN, BAD = (92, 200, 120), (236, 190, 70), (232, 72, 72)
 SERIES = {"delivered": (92, 200, 120), "backlog": (236, 150, 70)}
 
 PANEL_W = 400
+CONTROLS_W = 330
+ROW_H = 22
+BUTTONS = (
+    ("apply", "Apply & rerun"),
+    ("rerun", "Rerun"),
+    ("seed", "New seed"),
+    ("pause", "Pause"),
+    ("step", "Step"),
+    ("revert", "Revert edits"),
+    ("save", "Save TOML"),
+    ("fit", "Fit map"),
+)
+"""Control buttons, by the action name the session runs."""
 BAR_H = 30
 SPEEDS = (1, 2, 5, 10, 25, 50)
 PAN_STEP = 60.0
@@ -113,38 +129,144 @@ class Ui:
     paused: bool = False
     dragging: bool = False
     mouse: tuple[int, int] = (0, 0)
+    scroll: int = 0  # pixels the control list is scrolled down
+    editing: str | None = None  # key of the field being typed into
+    text: str = ""
+    message: str = ""
+    actions: list[tuple[Any, ...]] = field(default_factory=list)
+    """Control actions from input, for the session to run."""
 
 
 def layout(size: tuple[int, int]) -> dict[str, pygame.Rect]:
     w, h = size
-    panel = min(PANEL_W, w // 2)
+    panel = min(PANEL_W, w // 3)
+    left = min(CONTROLS_W, w // 4)
     return {
-        "map": pygame.Rect(0, 0, w - panel, h - BAR_H),
+        "controls": pygame.Rect(0, 0, left, h - BAR_H),
+        "map": pygame.Rect(left, 0, w - panel - left, h - BAR_H),
         "panel": pygame.Rect(w - panel, 0, panel, h - BAR_H),
         "bar": pygame.Rect(0, h - BAR_H, w, BAR_H),
     }
 
 
-def handle_event(event: pygame.event.Event, ui: Ui, cam: Camera) -> bool:
-    """Apply one input event; return False when the window should close."""
+type Action = tuple[Any, ...]
+
+
+@dataclass
+class ControlsView:
+    """Where every button and field row of the controls column sits."""
+
+    buttons: list[tuple[pygame.Rect, str, str]]
+    rows: list[tuple[pygame.Rect, str | Spec]]  # section headers and fields
+    list_area: pygame.Rect
+    max_scroll: int
+    targets: list[tuple[pygame.Rect, Action]]
+
+
+def controls_view(ui: Ui, draft: ExperimentConfig) -> ControlsView:
+    """Lay out the controls for ``draft``; clamps ``ui.scroll`` to the list."""
+    rect = layout(ui.size)["controls"]
+    x, w, gap = rect.x + 10, rect.width - 20, 6
+    bw, bh = (w - gap) // 2, 26
+    y = rect.y + 40
+    buttons, targets = [], []
+    for i, (name, label) in enumerate(BUTTONS):
+        r = pygame.Rect(x + (i % 2) * (bw + gap), y + (i // 2) * (bh + gap), bw, bh)
+        buttons.append((r, name, label))
+        targets.append((r, ("button", name)))
+    top = y + (len(BUTTONS) + 1) // 2 * (bh + gap) + 6
+    area = pygame.Rect(rect.x, top, rect.width, rect.bottom - top - ROW_H - 6)
+    entries: list[str | Spec] = []
+    for spec in specs(draft):
+        if not entries or spec.section != _section(entries[-1]):
+            entries.append(spec.section)
+        entries.append(spec)
+    max_scroll = max(0, len(entries) * ROW_H - area.height)
+    ui.scroll = min(ui.scroll, max_scroll)
+    rows = []
+    for i, entry in enumerate(entries):
+        r = pygame.Rect(x, area.y + i * ROW_H - ui.scroll, w, ROW_H - 2)
+        if not area.contains(r):
+            continue
+        rows.append((r, entry))
+        if isinstance(entry, Spec):
+            targets += _row_targets(r, entry)
+    return ControlsView(buttons, rows, area, max_scroll, targets)
+
+
+def _section(entry: str | Spec) -> str:
+    return entry.section if isinstance(entry, Spec) else entry
+
+
+def _row_targets(r: pygame.Rect, spec: Spec) -> list[tuple[pygame.Rect, Action]]:
+    value = pygame.Rect(r.x + r.width * 11 // 20, r.y, r.width * 9 // 20, r.height)
+    if spec.kind == "text":
+        return [(value, ("edit", spec.key))]
+    minus = pygame.Rect(value.x, r.y, 18, r.height)
+    plus = pygame.Rect(value.right - 18, r.y, 18, r.height)
+    box = pygame.Rect(minus.right + 2, r.y, plus.x - minus.right - 4, r.height)
+    return [
+        (minus, ("nudge", spec.key, -1)),
+        (box, ("edit", spec.key)),
+        (plus, ("nudge", spec.key, 1)),
+    ]
+
+
+def hit(targets: list[tuple[pygame.Rect, Action]], pos: Vec) -> Action | None:
+    return next((a for r, a in targets if r.collidepoint(pos)), None)
+
+
+def handle_event(
+    event: pygame.event.Event, ui: Ui, cam: Camera, view: ControlsView | None = None
+) -> bool:
+    """Apply one input event; return False when the window should close.
+
+    Clicks on controls and control hotkeys go to ``ui.actions``.
+    """
+    targets = view.targets if view else []
     if event.type == pygame.QUIT:
         return False
     if event.type == pygame.VIDEORESIZE:
         ui.size = (event.w, event.h)
         cam.view = tuple(layout(ui.size)["map"])
     elif event.type == pygame.MOUSEWHEEL:
-        cam.zoom_at(ui.mouse, ZOOM_STEP**event.y)
+        if view and view.list_area.collidepoint(ui.mouse):
+            ui.scroll = max(0, ui.scroll - event.y * ROW_H)
+        else:
+            cam.zoom_at(ui.mouse, ZOOM_STEP**event.y)
     elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-        ui.dragging = True
+        ui.editing = None
+        action = hit(targets, event.pos)
+        if action:
+            ui.actions.append(action)
+        else:
+            ui.dragging = True
     elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
         ui.dragging = False
     elif event.type == pygame.MOUSEMOTION:
         ui.mouse = event.pos
         if ui.dragging:
             cam.pan(*event.rel)
+    elif event.type == pygame.KEYDOWN and ui.editing:
+        _type(event, ui)
     elif event.type == pygame.KEYDOWN:
         return _key(event.key, ui, cam)
     return True
+
+
+def _type(event: pygame.event.Event, ui: Ui) -> None:
+    if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+        ui.actions.append(("commit", ui.editing, ui.text))
+        ui.editing = None
+    elif event.key == pygame.K_ESCAPE:
+        ui.editing = None
+    elif event.key == pygame.K_BACKSPACE:
+        ui.text = ui.text[:-1]
+    elif event.unicode.isprintable():
+        ui.text += event.unicode
+
+
+HOTKEYS = {pygame.K_r: "apply", pygame.K_n: "seed", pygame.K_PERIOD: "step"}
 
 
 def _key(key: int, ui: Ui, cam: Camera) -> bool:
@@ -157,7 +279,9 @@ def _key(key: int, ui: Ui, cam: Camera) -> bool:
     }
     if key == pygame.K_ESCAPE:
         return False
-    if key in pans:
+    if key in HOTKEYS:
+        ui.actions.append(("button", HOTKEYS[key]))
+    elif key in pans:
         cam.pan(*pans[key])
     elif key == pygame.K_f:
         cam.fit(*ui.world_size)
@@ -209,12 +333,21 @@ def draw(
     cam: Camera,
     history: History,
     ui: Ui,
+    draft: ExperimentConfig | None = None,
+    live: ExperimentConfig | None = None,
 ) -> None:
+    """Paint the whole window; the controls show ``draft`` against ``live``."""
     lay = layout(surface.get_size())
     surface.fill(BG)
     surface.set_clip(lay["map"])
     _draw_map(surface, world, fonts, cam, ui)
     surface.set_clip(None)
+    surface.fill(PANEL, lay["controls"])
+    pygame.draw.line(
+        surface, RULE, lay["controls"].topright, lay["controls"].bottomright
+    )
+    if draft is not None and live is not None:
+        _draw_controls(surface, lay["controls"], draft, live, fonts, ui)
     _draw_panel(surface, lay["panel"], world, name, fonts, history)
     _draw_bar(surface, lay["bar"], world, fonts, cam, ui)
 
@@ -439,6 +572,45 @@ def _sparkline(surface, rect, values: list[float], colour, label: str, font) -> 
     pygame.draw.lines(surface, colour, False, points, 2)
 
 
+def _draw_controls(
+    surface, rect, draft: ExperimentConfig, live: ExperimentConfig, fonts, ui: Ui
+) -> None:
+    s, m = fonts["s"], fonts["m"]
+    view = controls_view(ui, draft)
+    surface.blit(m.render("CONTROLS", True, TEXT), (rect.x + 10, rect.y + 12))
+    edited = draft != live
+    for r, name, label in view.buttons:
+        if name == "pause" and ui.paused:
+            label = "Resume"
+        pygame.draw.rect(surface, CARD, r, border_radius=5)
+        if name == "apply" and edited:
+            pygame.draw.rect(surface, WARN, r, 2, border_radius=5)
+        text = s.render(label, True, TEXT)
+        surface.blit(text, text.get_rect(center=r.center))
+    for r, entry in view.rows:
+        if isinstance(entry, str):
+            surface.blit(s.render(entry.upper(), True, MUTED), (r.x, r.y + 6))
+            continue
+        value = get(draft, entry.key)
+        colour = WARN if value != get(live, entry.key) else TEXT
+        label = entry.key.split(".")[-1]
+        surface.blit(s.render(label, True, colour), (r.x + 8, r.y + 4))
+        for box, action in _row_targets(r, entry):
+            pygame.draw.rect(surface, CARD, box, border_radius=4)
+            if action[0] == "nudge":
+                glyph = "<" if action[2] < 0 else ">"
+            elif ui.editing == entry.key:
+                pygame.draw.rect(surface, TEXT, box, 1, border_radius=4)
+                glyph = ui.text + "|"
+            else:
+                glyph = show(entry, value)
+            text = s.render(glyph[-24:], True, colour)
+            surface.blit(text, text.get_rect(center=box.center))
+    if ui.message:
+        line = s.render(ui.message[:48], True, WARN)
+        surface.blit(line, (rect.x + 10, rect.bottom - ROW_H))
+
+
 def _draw_bar(surface, rect, world: World, fonts, cam: Camera, ui: Ui) -> None:
     surface.fill(PANEL, rect)
     pygame.draw.line(surface, RULE, rect.topleft, rect.topright)
@@ -446,7 +618,8 @@ def _draw_bar(surface, rect, world: World, fonts, cam: Camera, ui: Ui) -> None:
     text = (
         f"t {world.t:.0f}   {state}   zoom {cam.zoom:.2f}   "
         f"ports {len(world.network.ports)}   nodes {len(world.network.nodes)}   "
-        "drag/WASD pan · wheel/+- zoom · F fit · space pause · up/down speed"
+        "drag/WASD pan · wheel/+- zoom · F fit · space pause · up/down speed · "
+        "R apply · N new seed · . step"
     )
     label = fonts["s"].render(text, True, MUTED)
     surface.blit(label, (rect.x + 12, rect.centery - label.get_height() / 2))

@@ -61,11 +61,13 @@ def test_history_samples_every_n_ticks_and_keeps_a_window() -> None:
 
 def test_layout_puts_the_map_left_panel_right_and_bar_below() -> None:
     lay = layout((1600, 900))
-    assert lay["map"].left == 0 and lay["map"].right == lay["panel"].left
+    assert lay["controls"].left == 0 and lay["map"].left == lay["controls"].right
+    assert lay["map"].right == lay["panel"].left
     assert lay["panel"].right == 1600 and lay["bar"].bottom == 900
     assert lay["map"].bottom == lay["bar"].top == lay["panel"].bottom
     small = layout((500, 300))
     assert small["map"].width > 0 and small["panel"].width > 0
+    assert small["controls"].width > 0
 
 
 def test_tiles_and_port_rows_summarise_the_world() -> None:
@@ -149,20 +151,22 @@ def test_draw_paints_land_ocean_lanes_storms_and_vessels(fonts) -> None:
         return surface.get_at((int(x), int(y)))[:3]
 
     geo = world.geography
-    land = next(
+    inland = [
         ((c + 0.5) * geo.cell, (r + 0.5) * geo.cell)
         for r in range(geo.rows)
         for c in range(geo.cols)
-        if geo.land[r][c]
-        and all(
+        if all(
             geo.land[min(geo.rows - 1, max(0, r + dr))][
                 min(geo.cols - 1, max(0, c + dc))
             ]
             for dc in (-1, 0, 1)
             for dr in (-1, 0, 1)
         )
-    )
-    assert px(land) == LAND
+    ]
+    view = pygame.Rect(cam.view)
+    inland = [p for p in inland if view.collidepoint(cam.to_screen(p))]
+    painted = [p for p in inland if px(p) == LAND]
+    assert len(painted) > 0.8 * len(inland) > 0  # overlays cover a few
     net = world.network
     a, b = net.nodes[lane.a], net.nodes[lane.b]
     assert px(((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)) == CLOSED
@@ -224,3 +228,109 @@ def test_tail_shows_only_the_lines_that_fit() -> None:
     assert tail(log, -5, 10) == []
     assert tail(log, 25, 10) == ["b", "c"]
     assert tail(log, 100, 10) == log
+
+
+def test_controls_view_lays_out_buttons_and_scrolls_field_rows() -> None:
+    from apeks.controls import specs
+    from apeks.experiment import ExperimentConfig
+    from apeks.render import BUTTONS, controls_view, hit
+
+    ui = Ui(size=(1600, 900))
+    cfg = ExperimentConfig()
+    view = controls_view(ui, cfg)
+    names = [a[1] for _, a in view.targets if a[0] == "button"]
+    assert names == [b for b, _ in BUTTONS]
+    keys = [s.key for s in specs(cfg)]
+    shown = [a[1] for _, a in view.targets if a[0] == "edit"]
+    assert shown == keys[: len(shown)] and shown
+    seed_box = next(r for r, a in view.targets if a == ("edit", "seed"))
+    assert hit(view.targets, seed_box.center) == ("edit", "seed")
+    assert hit(view.targets, (5000, 5000)) is None
+    name_row = [a for _, a in view.targets if len(a) > 1 and a[1] == "name"]
+    assert name_row == [("edit", "name")]  # text has no arrows
+    ui.scroll = 10**6
+    scrolled = controls_view(ui, cfg)
+    assert ui.scroll == scrolled.max_scroll > 0
+    last = [a[1] for _, a in scrolled.targets if a[0] == "edit"]
+    assert last[-1] == keys[-1] and "seed" not in last
+    for rect, action in scrolled.targets:
+        if action[0] != "button":
+            assert scrolled.list_area.contains(rect)
+
+
+def test_events_click_targets_scroll_controls_and_type_values() -> None:
+    from apeks.experiment import ExperimentConfig
+    from apeks.render import controls_view
+
+    pygame.init()
+    ui = Ui(size=(1600, 900))
+    cam = Camera(view=tuple(layout(ui.size)["map"]))
+    view = controls_view(ui, ExperimentConfig())
+    ev = pygame.event.Event
+    seed_box = next(r for r, a in view.targets if a == ("edit", "seed"))
+    handle_event(
+        ev(pygame.MOUSEBUTTONDOWN, pos=seed_box.center, button=1), ui, cam, view
+    )
+    assert ui.actions == [("edit", "seed")] and not ui.dragging
+    ui.actions.clear()
+    ui.editing, ui.text = "seed", "1"
+    zoom = cam.zoom
+    for key, uni in (
+        (pygame.K_2, "2"),
+        (pygame.K_d, "d"),
+        (pygame.K_TAB, "\t"),
+        (pygame.K_BACKSPACE, ""),
+    ):
+        assert handle_event(ev(pygame.KEYDOWN, key=key, unicode=uni), ui, cam, view)
+    assert ui.text == "12" and cam.zoom == zoom  # typing is not a hotkey
+    handle_event(ev(pygame.KEYDOWN, key=pygame.K_RETURN, unicode="\r"), ui, cam, view)
+    assert ui.actions == [("commit", "seed", "12")] and ui.editing is None
+    ui.editing = "seed"
+    assert handle_event(ev(pygame.KEYDOWN, key=pygame.K_ESCAPE, unicode=""), ui, cam)
+    assert ui.editing is None  # Esc cancels the edit, not the window
+    ui.editing = "seed"
+    handle_event(ev(pygame.MOUSEBUTTONDOWN, pos=cam.view[:2], button=1), ui, cam, view)
+    assert ui.editing is None and ui.dragging
+    ui.actions.clear()
+    for key, action in (
+        (pygame.K_r, ("button", "apply")),
+        (pygame.K_n, ("button", "seed")),
+        (pygame.K_PERIOD, ("button", "step")),
+    ):
+        handle_event(ev(pygame.KEYDOWN, key=key, unicode=""), ui, cam)
+        assert ui.actions[-1] == action
+    ui.mouse = view.list_area.center
+    handle_event(ev(pygame.MOUSEWHEEL, x=0, y=-2), ui, cam, view)
+    assert ui.scroll > 0 and cam.zoom == zoom
+    handle_event(ev(pygame.MOUSEWHEEL, x=0, y=50), ui, cam, view)
+    assert ui.scroll == 0
+    pygame.quit()
+
+
+def test_draw_shows_controls_with_edits_highlighted(fonts) -> None:
+    from apeks.controls import put
+    from apeks.experiment import ExperimentConfig
+    from apeks.render import WARN, controls_view
+
+    live = ExperimentConfig(map="classic")
+    world = build_world(live)
+    surface = pygame.Surface((1600, 900))
+    ui = Ui(world_size=(1200.0, 800.0))
+    cam = Camera(view=tuple(layout(ui.size)["map"]))
+    view = controls_view(ui, live)
+    seed_box = next(r for r, a in view.targets if a == ("edit", "seed"))
+    row = pygame.Rect(
+        view.list_area.x, seed_box.y, seed_box.x - view.list_area.x, seed_box.h
+    )
+
+    def colours():
+        return {surface.get_at(p)[:3] for p in _pixels(row)}
+
+    draw(surface, world, "classic", fonts, cam, History(), ui, live, live)
+    assert WARN not in colours()
+    draft = put(live, "seed", 5)
+    ui.message, ui.paused = "saved", True
+    draw(surface, world, "classic", fonts, cam, History(), ui, draft, live)
+    assert WARN in colours()
+    ui.editing, ui.text = "seed", "77"
+    draw(surface, world, "classic", fonts, cam, History(), ui, draft, live)

@@ -251,3 +251,48 @@ def test_run_times_each_phase_and_describes_the_map() -> None:
     m = result["map"]
     assert m["ports"] == 10 and m["nodes"] >= 20 and m["lanes"] > 0
     assert m["adjacency"] == 3 and m["kind"] == "generated"
+
+
+def test_engine_table_overrides_policy_params_within_bounds(tmp_path: Path) -> None:
+    from apeks.experiment import ENGINES, engine_keys
+
+    assert engine_keys(ExperimentConfig()) == ("aco", "boids")
+    assert engine_keys(ExperimentConfig(routing="llm", formation="llm")) == (
+        "scored",
+        "slot",
+    )
+    cfg = ExperimentConfig(engine={"aco": {"alpha": 3.0, "beta": 99.0}})
+    world = build_world(cfg)
+    assert world.routing.params.alpha == 3.0 and world.routing.params.beta == 5.0
+    slot = build_world(
+        ExperimentConfig(formation="llm", engine={"slot": {"shape": "wedge"}})
+    )
+    assert slot.formation.params.shape == "wedge"
+    assert set(ENGINES) == {"aco", "scored", "boids", "slot"}
+    path = tmp_path / "e.toml"
+    path.write_text('name = "e"\n[engine.boids]\nw_sep = 4.0\n')
+    assert load_config(path).engine == {"boids": {"w_sep": 4.0}}
+    path.write_text('name = "e"\n[engine.nope]\nx = 1\n')
+    with pytest.raises(ValueError):
+        load_config(path)
+
+
+def test_to_toml_round_trips_a_config(tmp_path: Path) -> None:
+    from apeks.experiment import to_toml
+    from apeks.news import NewsSettings
+
+    cfg = ExperimentConfig(
+        name='odd "name"',
+        routing="llm",
+        llm="claude",
+        model="sonnet",
+        seed=7,
+        demand=1.5,
+        news=NewsSettings(delay=30.0, correction_delay=float("inf")),
+        engine={"scored": {"avoid": ("A>B",), "w_report": 2.0}},
+    )
+    path = tmp_path / "c.toml"
+    path.write_text(to_toml(cfg))
+    back = load_config(path)
+    assert back.engine == {"scored": {"avoid": ["A>B"], "w_report": 2.0}}
+    assert back == cfg.__class__(**{**cfg.__dict__, "engine": back.engine})

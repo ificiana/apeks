@@ -163,7 +163,9 @@ config:
 
 Other config keys: `map` (`generated` or `classic`), `ports` and `adjacency`
 (generated map only; defaults 5 and 3), `seed`, `ticks`, `demand` (scales `DEMAND_RATE`, default 1), `llm` (`stub`, `ollama`, `claude`, or `""` for arms without an LLM module), `model`, `url`,
-`latency`, `budget`, and the `[news]` table.
+`latency`, `budget`, the `[news]` table, and `[engine.<key>]` tables that set
+the starting policy of an engine (`aco`, `scored`, `boids` or `slot`), clamped
+to each field's bounds, for example `[engine.aco]` with `alpha = 2.0`.
 
 A list of seeds (`seed = [0, 1, 2]`) makes a sweep: one run per seed, named
 `<name>_s<seed>`. Lists of `ports` and `adjacency` expand the same way, into
@@ -216,10 +218,24 @@ uv run apeks-run experiments/*.toml --llm stub   # offline, no LLM calls
 uv run apeks-run experiments/llm.toml --llm ollama --ticks 3500
 ```
 
-The window is a dashboard: the map on the left (drag or WASD to pan, wheel or
-+/- to zoom, F to fit, a minimap of the whole sea), a panel on the right with
-the headline figures, delivered and backlog charts, a port table and the event
-log, and a status bar. Space pauses, up/down change speed, Esc quits.
+The window is a dashboard in three columns and a status bar:
+
+- **Controls** (left): buttons for Apply & rerun, Rerun, New seed, Pause, Step,
+  Revert edits, Save TOML and Fit map, then every config field by section
+  (run, map, modules, llm, news, and the parameters of the engines in use).
+  `<` and `>` step a value or cycle a choice; click a value to type one, Enter
+  to set it, Esc to cancel. Edits go to a draft, highlighted until applied.
+  Save writes the draft to `logs/dashboard/<name>_<stamp>.toml`, which
+  `apeks` and `apeks-run` both read.
+- **Map** (middle): drag or WASD to pan, wheel or +/- to zoom, F to fit, and a
+  minimap of the whole sea.
+- **Figures** (right): the headline figures, delivered and backlog charts, a
+  port table and the event log.
+
+Space pauses, up/down change speed, R applies the draft and reruns, N reruns
+with the next seed, `.` steps one tick, Esc quits. The world steps on its own
+thread, so the window stays responsive while an LLM call runs; a banner shows
+while a step is waiting on one.
 
 `--ticks`, `--llm` and `--model` override every config. Each arm saves two files under
 `logs/` (git-ignored; `--logs DIR` to change), stamped with the invocation's
@@ -305,8 +321,9 @@ a logged-in `claude` CLI on `PATH`. Calls take a few seconds each.
 | `src/apeks/experiment.py` | experiment configs and world assembly |
 | `src/apeks/runner.py` | headless CLI |
 | `src/apeks/trace.py` | JSONL trace writer and reader |
-| `src/apeks/render.py` | the dashboard: camera, history, layout, input, drawing |
-| `src/apeks/app.py` | the window and its event loop |
+| `src/apeks/controls.py` | editable config fields: specs, get, put, step, parse |
+| `src/apeks/render.py` | the dashboard: camera, history, layout, controls, input, drawing |
+| `src/apeks/app.py` | the session (live and draft config), stepper thread and event loop |
 
 ## Development
 

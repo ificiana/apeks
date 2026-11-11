@@ -1,8 +1,10 @@
 """Experiment configs: which engine runs each module, and how to build the world."""
 
 import itertools
+import json
+import math
 import tomllib
-from dataclasses import dataclass, fields, replace
+from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +20,7 @@ from apeks.llm import (
     StubClient,
 )
 from apeks.news import NewsSettings, generate
+from apeks.policy import coerce
 from apeks.radio import Radio
 from apeks.routing import AcoParams, AcoRouting, ScoredRouteParams, ScoredRouting
 from apeks.seeds import derive
@@ -29,6 +32,13 @@ BACKENDS = ("stub", "ollama", "claude")
 MAPS = ("generated", "classic")
 SWEPT = (("ports", "p"), ("adjacency", "k"), ("seed", "s"))
 """Keys a TOML may give as lists, in name order, with their name suffix."""
+ENGINES: dict[str, type] = {
+    "aco": AcoParams,
+    "scored": ScoredRouteParams,
+    "boids": BoidsParams,
+    "slot": SlotParams,
+}
+"""Policy parameter classes, by the key of their ``[engine.<key>]`` TOML table."""
 
 ROUTING_PURPOSE = (
     "At every waypoint a convoy scores its open lanes and takes the lowest score: "
@@ -62,6 +72,8 @@ class ExperimentConfig:
     map: str = "generated"
     ports: int = 5
     adjacency: int = 3
+    engine: dict[str, dict[str, Any]] = field(default_factory=dict)
+    """Starting policy overrides per engine key; values are clamped to bounds."""
 
     def __post_init__(self) -> None:
         for value, allowed in [
@@ -74,6 +86,44 @@ class ExperimentConfig:
                 raise ValueError(f"{value!r} is not one of {allowed}")
         if not self.llm and "llm" in (self.routing, self.formation):
             raise ValueError(f"{self.name}: an llm module needs an llm backend")
+
+
+def engine_keys(cfg: ExperimentConfig) -> tuple[str, str]:
+    """The ``ENGINES`` keys of the routing and formation policies ``cfg`` runs."""
+    return (
+        "aco" if cfg.routing == "aco" else "scored",
+        "boids" if cfg.formation == "boids" else "slot",
+    )
+
+
+def engine_params(cfg: ExperimentConfig, key: str) -> Any:
+    cls = ENGINES[key]
+    return coerce(cls, cfg.engine.get(key, {}), cls())
+
+
+def _toml_value(value: Any) -> str:
+    if isinstance(value, float) and math.isinf(value):
+        return str(value)  # "inf" or "-inf", as TOML spells them
+    if isinstance(value, list | tuple):
+        return "[" + ", ".join(_toml_value(v) for v in value) + "]"
+    return json.dumps(value)
+
+
+def to_toml(cfg: ExperimentConfig) -> str:
+    """A TOML file that ``load_config`` reads back as ``cfg``."""
+    lines = [
+        f"{f.name} = {_toml_value(getattr(cfg, f.name))}"
+        for f in fields(cfg)
+        if f.name not in ("news", "engine")
+    ]
+    lines += ["", "[news]"]
+    lines += [
+        f"{f.name} = {_toml_value(getattr(cfg.news, f.name))}" for f in fields(cfg.news)
+    ]
+    for key, values in sorted(cfg.engine.items()):
+        lines += ["", f"[engine.{key}]"]
+        lines += [f"{k} = {_toml_value(v)}" for k, v in sorted(values.items())]
+    return "\n".join(lines) + "\n"
 
 
 def load_configs(path: Path) -> list[ExperimentConfig]:
@@ -93,6 +143,10 @@ def load_configs(path: Path) -> list[ExperimentConfig]:
         if bad:
             raise ValueError(f"unknown [news] keys in {path}: {sorted(bad)}")
         data["news"] = NewsSettings(**data["news"])
+    for key, values in data.get("engine", {}).items():
+        names = {f.name for f in fields(ENGINES[key])} if key in ENGINES else set()
+        if not names or set(values) - names:
+            raise ValueError(f"unknown [engine.{key}] table or keys in {path}")
     swept = [(k, tag, data.pop(k)) for k, tag in SWEPT if isinstance(data.get(k), list)]
     base = ExperimentConfig(**data)
     runs = []
@@ -148,14 +202,14 @@ def build_world(cfg: ExperimentConfig, client: LlmClient | None = None) -> World
         )
 
     if cfg.routing == "aco":
-        routing: Any = AcoRouting(AcoParams(), derive(cfg.seed, "aco"))
+        routing: Any = AcoRouting(engine_params(cfg, "aco"), derive(cfg.seed, "aco"))
     else:
-        routing = ScoredRouting(ScoredRouteParams())
+        routing = ScoredRouting(engine_params(cfg, "scored"))
         author("routing", ROUTING_PURPOSE, ScoredRouteParams)
     if cfg.formation == "boids":
-        formation: Any = BoidsFormation(BoidsParams())
+        formation: Any = BoidsFormation(engine_params(cfg, "boids"))
     else:
-        formation = SlotFormation(SlotParams())
+        formation = SlotFormation(engine_params(cfg, "slot"))
         author("formation", FORMATION_PURPOSE, SlotParams)
     return World(
         network=net,
