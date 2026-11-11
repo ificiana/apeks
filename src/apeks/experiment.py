@@ -53,10 +53,12 @@ class ExperimentConfig:
         for value, allowed in [
             (self.routing, ROUTING),
             (self.formation, FORMATION),
-            (self.llm, BACKENDS),
+            (self.llm, ("", *BACKENDS)),
         ]:
             if value not in allowed:
                 raise ValueError(f"{value!r} is not one of {allowed}")
+        if not self.llm and "llm" in (self.routing, self.formation):
+            raise ValueError(f"{self.name}: an llm module needs an llm backend")
 
 
 def load_config(path: Path) -> ExperimentConfig:

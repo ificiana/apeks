@@ -3,5 +3,5 @@ routing = "aco"
 formation = "boids"
 seed = 0
 ticks = 6000
-llm = "stub"
-model = "lfm3:latest"
+llm = ""
+model = ""

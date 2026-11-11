@@ -1,4 +1,14 @@
 import pytest
+from apeks.sim import (
+    CONES,
+    Agent,
+    Trail,
+    World,
+    advance,
+    build_nav,
+    cardinal,
+    make_stations,
+)
 
 from apeks import sim
 from apeks.config import (
@@ -15,16 +25,6 @@ from apeks.config import (
     PUSH_REACH,
     STATION_COUNT,
     STEP_INTERVAL,
-)
-from apeks.sim import (
-    CONES,
-    Agent,
-    Trail,
-    World,
-    advance,
-    build_nav,
-    cardinal,
-    make_stations,
 )
 
 STATIONS = make_stations()

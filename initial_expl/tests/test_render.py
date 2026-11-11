@@ -1,5 +1,6 @@
 import pygame
 import pytest
+from apeks.sim import Agent, Trail, build_nav, make_stations
 
 from apeks.config import (
     CHARGE_RING,
@@ -13,7 +14,6 @@ from apeks.config import (
     WORLD_SIZE,
 )
 from apeks.render import draw_agents, draw_arrow, draw_grid, draw_minimap
-from apeks.sim import Agent, Trail, build_nav, make_stations
 
 pygame.font.init()
 

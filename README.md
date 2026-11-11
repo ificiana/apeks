@@ -73,7 +73,7 @@ config:
 | `llm_routing.toml` | llm | boids |
 | `llm_formation.toml` | aco | llm |
 
-Other config keys: `seed`, `ticks`, `llm` (`stub`, `ollama` or `claude`), `model`, `url`,
+Other config keys: `seed`, `ticks`, `llm` (`stub`, `ollama`, `claude`, or `""` for arms without an LLM module), `model`, `url`,
 `latency`, `budget`.
 
 ## Metrics
@@ -100,6 +100,7 @@ git config core.hooksPath .githooks
 uv run apeks                                # window, classical arm
 uv run apeks experiments/llm.toml           # window, any arm; space pauses, up/down speed
 uv run apeks-run experiments/*.toml         # headless, one JSON summary line per arm
+uv run apeks-run experiments/*.toml --llm stub   # offline, no LLM calls
 uv run apeks-run experiments/llm.toml --llm ollama --ticks 3500
 ```
 
@@ -133,8 +134,9 @@ re-simulating it. Every record has `t` and `kind`:
 
 ### LLM backends
 
-The `stub` backend replies `{}`, which leaves the default policy in force, so
-runs work offline. Two real backends:
+The LLM arms use `claude` with `claude-haiku-5-5`. `--llm stub` runs them
+offline: the stub replies `{}`, which leaves the default policy in force.
+Two real backends:
 
 #### Ollama
 

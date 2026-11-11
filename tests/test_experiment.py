@@ -126,3 +126,10 @@ def test_cli_model_override(tmp_path, capsys, monkeypatch) -> None:
     args = [str(ARMS / "classical.toml"), "--ticks", "1", "--no-trace"]
     runner.main([*args, "--logs", str(tmp_path), "--model", "x"])
     assert seen["model"] == "x"
+
+
+def test_empty_backend_allowed_only_without_llm_modules() -> None:
+    world = build_world(ExperimentConfig(llm="", model=""))
+    assert world.authors == {}
+    with pytest.raises(ValueError, match="needs an llm backend"):
+        ExperimentConfig(routing="llm", llm="")

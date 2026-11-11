@@ -1,6 +1,6 @@
 import pygame
 import pytest
-from apeks.llm import ParallelSwarmBench
+from apeks.sim import Agent, MovingBarrier, Trail, build_nav, make_stations
 
 from apeks.config import (
     BARRIER_COLOR,
@@ -24,6 +24,7 @@ from apeks.config import (
     WHITE,
     WORLD_SIZE,
 )
+from apeks.llm import ParallelSwarmBench
 from apeks.render import (
     draw_agents,
     draw_arrow,
@@ -33,7 +34,6 @@ from apeks.render import (
     draw_minimap,
     draw_quad_view,
 )
-from apeks.sim import Agent, MovingBarrier, Trail, build_nav, make_stations
 
 pygame.font.init()
 

@@ -1,4 +1,23 @@
 import pytest
+from apeks.sim import (
+    CONES,
+    Agent,
+    MovingBarrier,
+    Trail,
+    World,
+    advance,
+    build_nav,
+    cardinal,
+    format_token_line,
+    make_food_clusters,
+    make_moving_barriers,
+    make_nest,
+    make_static_obstacles,
+    make_stations,
+    parse_token_line,
+    prune_token_lines,
+    update_token_text,
+)
 
 from apeks import sim
 from apeks.config import (
@@ -19,25 +38,6 @@ from apeks.config import (
     PUSH_REACH,
     STATION_COUNT,
     STEP_INTERVAL,
-)
-from apeks.sim import (
-    CONES,
-    Agent,
-    MovingBarrier,
-    Trail,
-    World,
-    advance,
-    build_nav,
-    cardinal,
-    format_token_line,
-    make_food_clusters,
-    make_moving_barriers,
-    make_nest,
-    make_static_obstacles,
-    make_stations,
-    parse_token_line,
-    prune_token_lines,
-    update_token_text,
 )
 
 STATIONS = make_stations()

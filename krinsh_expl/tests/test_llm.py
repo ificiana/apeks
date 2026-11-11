@@ -5,6 +5,16 @@ import urllib.error
 from unittest.mock import MagicMock, patch
 
 import pytest
+from apeks.sim import (
+    Agent,
+    MovingBarrier,
+    NavMap,
+    Trail,
+    World,
+    build_nav,
+)
+
+from apeks.config import GRID_SIZE, MAX_CHARGE, NEST_TILES
 from apeks.llm import (
     AgentObservation,
     LLMBackend,
@@ -20,16 +30,6 @@ from apeks.llm import (
     synthesize_token_intel,
     to_narrative_briefing,
     to_prompt,
-)
-
-from apeks.config import GRID_SIZE, MAX_CHARGE, NEST_TILES
-from apeks.sim import (
-    Agent,
-    MovingBarrier,
-    NavMap,
-    Trail,
-    World,
-    build_nav,
 )
 
 

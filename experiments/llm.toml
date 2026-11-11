@@ -3,5 +3,5 @@ routing = "llm"
 formation = "llm"
 seed = 0
 ticks = 6000
-llm = "stub"
-model = "lfm3:latest"
+llm = "claude"
+model = "claude-haiku-5-5"
