@@ -197,9 +197,27 @@ def test_claude_client_runs_headless_with_schema(monkeypatch) -> None:
     }
 
 
+def test_claude_client_reads_event_list_output(monkeypatch) -> None:
+    events = [
+        {"type": "system", "subtype": "init"},
+        {
+            "type": "result",
+            "is_error": False,
+            "structured_output": {"x": 2},
+            "total_cost_usd": 0.25,
+            "usage": {"input_tokens": 3, "output_tokens": 4},
+        },
+    ]
+    monkeypatch.setattr(subprocess, "run", fake_run(json.dumps(events)))
+    client = ClaudeCodeClient(model="m")
+    assert json.loads(client.complete("p", {})) == {"x": 2}
+    assert client.usage == {"input_tokens": 3, "output_tokens": 4, "cost_usd": 0.25}
+
+
 @pytest.mark.parametrize(
     ("stdout", "code"),
     [
+        ('[{"type": "system"}]', 0),
         ('{"is_error": true, "result": "nope"}', 0),
         ('{"is_error": false, "result": "no structure"}', 0),
         ("", 1),

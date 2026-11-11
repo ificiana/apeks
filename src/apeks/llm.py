@@ -118,6 +118,8 @@ class ClaudeCodeClient:
         if done.returncode != 0:
             raise ValueError(f"claude exited {done.returncode}: {done.stderr[-500:]}")
         reply = json.loads(done.stdout)
+        if isinstance(reply, list):  # newer CLIs emit every event; keep the result
+            reply = next((e for e in reply if e.get("type") == "result"), {})
         used = reply.get("usage", {})
         self.usage["input_tokens"] += sum(
             used.get(k, 0)
