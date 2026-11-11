@@ -141,3 +141,56 @@ def test_lane_index_is_rebuilt_when_a_channel_is_added() -> None:
     net.add_channel("B", "Y", width=20.0, capacity=2)
     assert "Y" in net.times_from("A", Ocean(), 0.0, 2.0)
     assert "A" in net.times_to("Y", Ocean(), 0.0, 2.0)
+
+
+def _reference_times(net, start, far_end, costs, skip):
+    """Plain Dijkstra over every lane, for checking the fast search."""
+    best, todo = {start: 0.0}, {start}
+    while todo:
+        node = min(sorted(todo), key=best.__getitem__)
+        todo.discard(node)
+        for lane in net.lanes.values():
+            near = lane.b if far_end == "a" else lane.a
+            if near != node or lane.id in skip:
+                continue
+            other, total = getattr(lane, far_end), best[node] + costs[lane.id]
+            if total < best.get(other, math.inf):
+                best[other] = total
+                todo.add(other)
+    return best
+
+
+def test_searches_match_a_plain_dijkstra_on_a_random_network() -> None:
+    import random
+
+    rng = random.Random(3)
+    net = SeaNetwork()
+    for i in range(40):
+        net.add_node(f"n{i}", (rng.random(), rng.random()))
+    for _ in range(90):
+        a, b = rng.sample(range(40), 2)
+        net.add_channel(f"n{a}", f"n{b}", 1.0, 1)
+    costs = {
+        lid: rng.choice([0.0, math.inf, rng.random(), rng.random()])
+        for lid in net.lanes
+    }
+    skip = set(rng.sample(sorted(net.lanes), 20)) | {"gone>lane"}
+    for node in ("n0", "n7", "n19"):
+        for exclude in (None, skip):
+            want = _reference_times(net, node, "a", costs, exclude or set())
+            got = net.times_to(node, Ocean(), 0, 1.0, exclude, costs)
+            assert got == want
+            want = _reference_times(net, node, "b", costs, exclude or set())
+            got = net.times_from(node, Ocean(), 0, 1.0, exclude, costs)
+            assert got == want
+
+
+def test_search_reuses_the_matrix_for_the_same_costs() -> None:
+    net = make_net()
+    costs = net.lane_times(Ocean(), 0, 1.0)
+    net.times_to("B", Ocean(), 0, 1.0, None, costs)
+    matrix = net._matrix
+    net.times_from("A", Ocean(), 0, 1.0, {"A>W"}, costs)
+    assert net._matrix is matrix
+    net.times_to("B", Ocean(), 0, 1.0, None, dict(costs))
+    assert net._matrix is not matrix

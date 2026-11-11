@@ -1,8 +1,12 @@
 """The sea-lane network: ports and waypoints joined by directed lanes."""
 
-import heapq
 import math
 from dataclasses import dataclass, field
+from typing import Any
+
+import numpy as np
+from scipy.sparse import csr_matrix
+from scipy.sparse.csgraph import dijkstra
 
 from apeks.geometry import Vec, add, dist, dot, normalize, perp, scale, sub
 from apeks.ocean import Ocean
@@ -31,6 +35,7 @@ class SeaNetwork:
     _index: tuple[dict[str, list[Lane]], dict[str, list[Lane]]] | None = field(
         default=None, repr=False, compare=False
     )
+    _matrix: Any = field(default=None, repr=False, compare=False)
 
     def add_node(self, name: str, pos: Vec) -> None:
         self.nodes[name] = pos
@@ -55,6 +60,26 @@ class SeaNetwork:
                 out.setdefault(lane.a, []).append(lane)
             self._index = (into, out)
         return self._index
+
+    def _lane_arrays(self, costs: dict[str, float]) -> Any:
+        """Node order, lane ids, ends and costs as arrays, kept per ``costs``."""
+        if self._matrix is None or self._matrix[0] is not costs:
+            names = list(self.nodes)
+            at = {n: i for i, n in enumerate(names)}
+            ids = list(self.lanes)
+            a = np.array([at[self.lanes[i].a] for i in ids], dtype=np.int32)
+            b = np.array([at[self.lanes[i].b] for i in ids], dtype=np.int32)
+            w = np.array([costs[i] for i in ids], dtype=float)
+            self._matrix = (
+                costs,
+                names,
+                at,
+                {i: k for k, i in enumerate(ids)},
+                a,
+                b,
+                w,
+            )
+        return self._matrix
 
     def length(self, lane: Lane) -> float:
         return dist(self.nodes[lane.a], self.nodes[lane.b])
@@ -105,8 +130,7 @@ class SeaNetwork:
         costs: dict[str, float] | None = None,
     ) -> dict[str, float]:
         """Estimated time from every node that can reach ``dest``."""
-        into, _ = self._lanes_by_end()
-        return self._dijkstra(dest, into, "a", ocean, t, speed, exclude, costs)
+        return self._dijkstra(dest, "a", ocean, t, speed, exclude, costs)
 
     def times_from(
         self,
@@ -118,13 +142,11 @@ class SeaNetwork:
         costs: dict[str, float] | None = None,
     ) -> dict[str, float]:
         """Estimated time from ``src`` to every node it can reach."""
-        _, out = self._lanes_by_end()
-        return self._dijkstra(src, out, "b", ocean, t, speed, exclude, costs)
+        return self._dijkstra(src, "b", ocean, t, speed, exclude, costs)
 
     def _dijkstra(
         self,
         start: str,
-        lanes_at: dict[str, list[Lane]],
         far_end: str,
         ocean: Ocean,
         t: float,
@@ -132,20 +154,20 @@ class SeaNetwork:
         exclude: set[str] | None,
         costs: dict[str, float] | None,
     ) -> dict[str, float]:
-        skip = exclude or set()
+        """Shortest times from ``start``, walking lanes towards ``far_end``.
+
+        SciPy's Dijkstra adds lane costs along each path in the same order as
+        a plain search, so the times are the same to the last bit.
+        """
         cost_of = costs if costs is not None else self.lane_times(ocean, t, speed)
-        best = {start: 0.0}
-        heap = [(0.0, start)]
-        while heap:
-            cost, node = heapq.heappop(heap)
-            if cost > best[node]:
-                continue
-            for lane in lanes_at.get(node, []):
-                if lane.id in skip:
-                    continue
-                other = getattr(lane, far_end)
-                total = cost + cost_of[lane.id]
-                if total < best.get(other, math.inf):
-                    best[other] = total
-                    heapq.heappush(heap, (total, other))
-        return best
+        _, names, at, index, a, b, w = self._lane_arrays(cost_of)
+        keep = np.isfinite(w)
+        for lane_id in exclude or ():
+            if lane_id in index:
+                keep[index[lane_id]] = False
+        src, dst = (a, b) if far_end == "b" else (b, a)
+        n = len(names)
+        graph = csr_matrix((w[keep], (src[keep], dst[keep])), shape=(n, n))
+        found = dijkstra(graph, directed=True, indices=at[start])
+        reached = np.flatnonzero(np.isfinite(found))
+        return {names[i]: float(found[i]) for i in reached}
