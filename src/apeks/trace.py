@@ -26,6 +26,8 @@ from typing import Any, TextIO
 
 def _plain(value: Any) -> Any:
     if is_dataclass(value):
+        if isinstance(value, type):
+            return value.__name__
         return _plain(asdict(value))
     if isinstance(value, dict):
         return {str(k): _plain(v) for k, v in value.items()}

@@ -33,3 +33,9 @@ def test_snapshot_cadence() -> None:
     every3 = Tracer(io.StringIO(), snapshot_every=3)
     assert [every3.wants_snapshot(t) for t in (0.0, 1.0, 3.0)] == [True, False, True]
     assert not Tracer(io.StringIO(), snapshot_every=0).wants_snapshot(0.0)
+
+
+def test_emit_writes_a_dataclass_type_as_its_name() -> None:
+    buf = io.StringIO()
+    Tracer(buf).emit(0.0, "x", params_cls=Point)
+    assert '"params_cls": "Point"' in buf.getvalue()
