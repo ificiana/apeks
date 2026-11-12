@@ -141,8 +141,9 @@ class Stepper:
 class Session:
     """The dashboard's state: the live config and world, and a draft to edit.
 
-    Edits change only ``draft``; Apply builds a new world from it. Each world
-    steps on its own ``Stepper`` thread when ``threaded``.
+    Edits change only ``draft``; Apply builds a new world from it with
+    ``world_factory`` (a replay passes one that answers LLM calls from a
+    trace). Each world steps on its own ``Stepper`` thread when ``threaded``.
     """
 
     def __init__(
@@ -150,8 +151,10 @@ class Session:
         cfg: ExperimentConfig,
         size: tuple[int, int] = (1600, 900),
         threaded: bool = False,
+        world_factory: Callable[[ExperimentConfig], World] | None = None,
     ) -> None:
         self.threaded = threaded
+        self.world_factory = world_factory
         self.save_dir = Path("logs/dashboard")
         self.ui = Ui(size=size)
         self.frame: pygame.Surface | None = None
@@ -159,7 +162,7 @@ class Session:
         self._build(cfg)
 
     def _build(self, cfg: ExperimentConfig) -> None:
-        world = build_world(cfg)
+        world = (self.world_factory or build_world)(cfg)
         if hasattr(self, "stepper"):
             self.stepper.stop(wait=False)  # never wait on an LLM call in flight
         geo = world.geography
