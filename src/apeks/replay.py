@@ -1,6 +1,7 @@
 """Replay a recorded run: ``replay [logs]``.
 
-The window lists every ``trace_*.jsonl`` under ``logs``; pick one with the
+Given one ``trace_*.jsonl`` (or its ``out_*.json``), the run opens at once.
+Given a folder, the window lists every ``trace_*.jsonl`` under it; pick one with the
 arrows and Enter, or a click. The run is simulated again from the config in
 the trace's ``meta`` record. Every LLM call is answered at once with the reply
 recorded in the trace, so the replay never touches a model and matches the
@@ -142,6 +143,16 @@ def find_traces(root: Path) -> list[Path]:
     )
 
 
+def given_trace(path: Path) -> Path | None:
+    """The trace to open at once when ``path`` names one run, else ``None``.
+
+    An ``out_*.json`` file stands for the trace saved next to it.
+    """
+    if path.is_file() and path.name.startswith("out_") and path.suffix == ".json":
+        path = path.with_name("trace_" + path.name[4:] + "l")
+    return path if path.is_file() else None
+
+
 @dataclass
 class Picker:
     """A scrolling list of trace files."""
@@ -218,7 +229,9 @@ def main(argv: list[str] | None = None) -> None:  # pragma: no cover
     from apeks.render import handle_event
 
     parser = argparse.ArgumentParser(prog="replay", description=__doc__)
-    parser.add_argument("logs", nargs="?", type=Path, default=Path("logs"))
+    parser.add_argument(
+        "logs", nargs="?", type=Path, default=Path("logs"), help="folder or trace"
+    )
     root = parser.parse_args(argv).logs
     pygame.init()
     screen = pygame.display.set_mode((1600, 900), pygame.RESIZABLE)
@@ -228,8 +241,8 @@ def main(argv: list[str] | None = None) -> None:  # pragma: no cover
         for k, n in (("s", 14), ("m", 18), ("l", 26))
     }
     clock = pygame.time.Clock()
-    picker = Picker(find_traces(root), root)
-    chosen: Path | None = None
+    chosen = given_trace(root)
+    picker = Picker([] if chosen else find_traces(root), root)
     while chosen is None:
         for event in pygame.event.get():
             if event.type == pygame.QUIT or (

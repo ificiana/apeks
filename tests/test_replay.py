@@ -15,6 +15,7 @@ from apeks.replay import (
     config_from_dict,
     draw_picker,
     find_traces,
+    given_trace,
     load,
     picker_event,
     status,
@@ -121,6 +122,18 @@ def test_find_traces_lists_newest_reports_first(tmp_path: Path) -> None:
         tmp_path / "r2/trace_b.jsonl",
         tmp_path / "r1/trace_a.jsonl",
     ]
+
+
+def test_given_trace_opens_a_file_or_its_out_file_twin(tmp_path: Path) -> None:
+    trace = tmp_path / "trace_a_1.jsonl"
+    trace.write_text("")
+    (tmp_path / "out_a_1.json").write_text("{}")
+    (tmp_path / "out_b_1.json").write_text("{}")
+    assert given_trace(trace) == trace
+    assert given_trace(tmp_path / "out_a_1.json") == trace
+    assert given_trace(tmp_path / "out_b_1.json") is None  # no trace saved
+    assert given_trace(tmp_path) is None
+    assert given_trace(tmp_path / "missing.jsonl") is None
 
 
 def key(k: int) -> pygame.event.Event:
