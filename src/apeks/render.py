@@ -15,29 +15,63 @@ from apeks.geometry import Vec, add, normalize, scale
 from apeks.mapgen import Geography
 from apeks.world import World
 
-# Light theme for the panels; natural colours for the map.
-BG = (243, 245, 248)
+# Panel colours come from the theme (see THEMES); the map keeps its own.
+BG = (246, 247, 249)
 PANEL = (255, 255, 255)
-CARD = (236, 240, 245)
-RULE = (214, 220, 228)
-TEXT = (30, 38, 52)
-MUTED = (100, 112, 130)
-DEEP = (22, 66, 112)
-OPEN_SEA = (14, 44, 78)  # beyond the world's edge
-SHALLOW = (46, 112, 156)
-LAND = (96, 128, 76)
-COAST = (210, 190, 140)
-LANE = (200, 222, 240)
-CLOSED = (236, 64, 64)
-NODE = (220, 232, 244)
-PORT = (255, 255, 255)
-CURRENT = (120, 190, 230)
-STORM = (170, 100, 220)
-LADEN = (255, 170, 40)
-EMPTY = (110, 235, 230)
-MAP_TEXT = (245, 248, 252)  # labels drawn over the sea
-GOOD, WARN, BAD = (30, 150, 80), (196, 128, 0), (212, 48, 48)
-SERIES = {"delivered": (30, 150, 80), "backlog": (220, 110, 30)}
+CARD = (242, 244, 247)
+RULE = (226, 230, 235)
+TEXT = (28, 33, 42)
+MUTED = (112, 120, 132)
+DEEP = (16, 40, 66)
+OPEN_SEA = (19, 34, 52)  # beyond the world's edge
+SHALLOW = (28, 82, 108)
+LAND = (54, 60, 50)
+COAST = (104, 108, 86)
+LANE = (128, 156, 186)
+CLOSED = (232, 93, 93)
+NODE = (128, 156, 186)
+PORT = (240, 244, 248)
+CURRENT = (110, 168, 210)
+STORM = (168, 120, 220)
+LADEN = (247, 178, 72)
+EMPTY = (104, 214, 204)
+MAP_TEXT = (226, 233, 241)  # labels drawn over the sea
+GOOD, WARN, BAD = (34, 150, 96), (204, 132, 20), (214, 64, 64)
+SERIES = {"delivered": (34, 150, 96), "backlog": (214, 120, 40)}
+
+THEMES: dict[str, dict[str, Any]] = {
+    "light": {
+        "BG": BG,
+        "PANEL": PANEL,
+        "CARD": CARD,
+        "RULE": RULE,
+        "TEXT": TEXT,
+        "MUTED": MUTED,
+        "GOOD": GOOD,
+        "WARN": WARN,
+        "BAD": BAD,
+        "SERIES": SERIES,
+    },
+    "dark": {
+        "BG": (11, 15, 21),
+        "PANEL": (18, 23, 31),
+        "CARD": (27, 33, 43),
+        "RULE": (44, 52, 64),
+        "TEXT": (226, 232, 240),
+        "MUTED": (136, 146, 160),
+        "GOOD": (74, 198, 132),
+        "WARN": (240, 176, 72),
+        "BAD": (244, 108, 108),
+        "SERIES": {"delivered": (74, 198, 132), "backlog": (244, 146, 72)},
+    },
+}
+"""Panel colours by theme name; ``use_theme`` makes one current."""
+
+
+def use_theme(name: str) -> None:
+    """Point the panel colour names at theme ``name``."""
+    globals().update(THEMES[name])
+
 
 PANEL_W = 400
 CONTROLS_W = 330
@@ -54,6 +88,7 @@ BUTTONS = (
 )
 """Control buttons, by the action name the session runs."""
 BAR_H = 30
+DRAWER_W = 44  # width of the controls column when shut
 SPEEDS = (1, 2, 5, 10, 25, 50)
 PAN_STEP = 60.0
 ZOOM_STEP = 1.15
@@ -137,15 +172,17 @@ class Ui:
     text: str = ""
     message: str = ""
     selected: str | None = None  # vessel whose dialog is open
+    drawer: bool = False  # controls column open
+    theme: str = "dark"  # a key of THEMES; T switches it
     press: tuple[int, int] | None = None  # where the left button went down
     actions: list[tuple[Any, ...]] = field(default_factory=list)
     """Control actions from input, for the session to run."""
 
 
-def layout(size: tuple[int, int]) -> dict[str, pygame.Rect]:
+def layout(size: tuple[int, int], drawer: bool = True) -> dict[str, pygame.Rect]:
     w, h = size
     panel = min(PANEL_W, w // 3)
-    left = min(CONTROLS_W, w // 4)
+    left = min(CONTROLS_W, w // 4) if drawer else DRAWER_W
     return {
         "controls": pygame.Rect(0, 0, left, h - BAR_H),
         "map": pygame.Rect(left, 0, w - panel - left, h - BAR_H),
@@ -170,11 +207,16 @@ class ControlsView:
 
 def controls_view(ui: Ui, draft: ExperimentConfig) -> ControlsView:
     """Lay out the controls for ``draft``; clamps ``ui.scroll`` to the list."""
-    rect = layout(ui.size)["controls"]
+    rect = layout(ui.size, ui.drawer)["controls"]
+    if not ui.drawer:
+        toggle = pygame.Rect(rect.x + 8, rect.y + 10, 28, 28)
+        return ControlsView([], [], pygame.Rect(0, 0, 0, 0), 0, [(toggle, ("drawer",))])
+    toggle = pygame.Rect(rect.right - 36, rect.y + 8, 28, 28)
     x, w, gap = rect.x + 10, rect.width - 20, 6
     bw, bh = (w - gap) // 2, 26
     y = rect.y + 40
-    buttons, targets = [], []
+    buttons: list[tuple[pygame.Rect, str, str]] = []
+    targets: list[tuple[pygame.Rect, Action]] = [(toggle, ("drawer",))]
     for i, (name, label) in enumerate(BUTTONS):
         r = pygame.Rect(x + (i % 2) * (bw + gap), y + (i // 2) * (bh + gap), bw, bh)
         buttons.append((r, name, label))
@@ -233,7 +275,7 @@ def handle_event(
         return False
     if event.type == pygame.VIDEORESIZE:
         ui.size = (event.w, event.h)
-        cam.view = tuple(layout(ui.size)["map"])
+        cam.view = tuple(layout(ui.size, ui.drawer)["map"])
     elif event.type == pygame.MOUSEWHEEL:
         if view and view.list_area.collidepoint(ui.mouse):
             ui.scroll = max(0, ui.scroll - event.y * ROW_H)
@@ -242,7 +284,9 @@ def handle_event(
     elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
         ui.editing = None
         action = hit(targets, event.pos)
-        if action:
+        if action == ("drawer",):
+            _toggle(ui, cam)
+        elif action:
             ui.actions.append(action)
         else:
             ui.dragging, ui.press = True, event.pos
@@ -273,6 +317,12 @@ def _type(event: pygame.event.Event, ui: Ui) -> None:
         ui.text += event.unicode
 
 
+def _toggle(ui: Ui, cam: Camera) -> None:
+    """Open or shut the controls column; the map takes up the difference."""
+    ui.drawer = not ui.drawer
+    cam.view = tuple(layout(ui.size, ui.drawer)["map"])
+
+
 HOTKEYS = {pygame.K_r: "apply", pygame.K_n: "seed", pygame.K_PERIOD: "step"}
 
 
@@ -292,8 +342,12 @@ def _key(key: int, ui: Ui, cam: Camera) -> bool:
         ui.actions.append(("button", HOTKEYS[key]))
     elif key in pans:
         cam.pan(*pans[key])
+    elif key == pygame.K_c:
+        _toggle(ui, cam)
     elif key == pygame.K_f:
         cam.fit(*ui.world_size)
+    elif key == pygame.K_t:
+        ui.theme = "light" if ui.theme == "dark" else "dark"
     elif key == pygame.K_SPACE:
         ui.paused = not ui.paused
     elif key in (pygame.K_UP, pygame.K_DOWN):
@@ -306,18 +360,15 @@ def _key(key: int, ui: Ui, cam: Camera) -> bool:
 
 def tiles(world: World) -> list[tuple[str, str]]:
     s = world.summary()
-    at_sea = sum(len(c.vessels) for c in world.convoys.values() if c.state == "sailing")
     calls = sum(m["calls"] for m in s["llm"].values())
     latency = s["mean_latency"]
     return [
         ("delivered", f"{s['deliveries']} / {s['generated']}"),
-        ("latency", "-" if latency is None else f"{latency:.0f}"),
         ("backlog", str(s["backlog"])),
+        ("latency", "-" if latency is None else f"{latency:.0f}"),
         ("near misses", str(s["near_misses"])),
-        ("at sea", str(at_sea)),
-        ("closed lanes", str(len(world.closed))),
-        ("llm calls", str(calls)),
         ("congestion", f"{s['congestion_ticks']:.0f}"),
+        ("llm calls", str(calls)),
     ]
 
 
@@ -346,7 +397,8 @@ def draw(
     live: ExperimentConfig | None = None,
 ) -> None:
     """Paint the whole window; the controls show ``draft`` against ``live``."""
-    lay = layout(surface.get_size())
+    use_theme(ui.theme)
+    lay = layout(surface.get_size(), ui.drawer)
     surface.fill(BG)
     surface.set_clip(lay["map"])
     _draw_map(surface, world, fonts, cam, ui)
@@ -355,7 +407,9 @@ def draw(
     pygame.draw.line(
         surface, RULE, lay["controls"].topright, lay["controls"].bottomright
     )
-    if draft is not None and live is not None:
+    if not ui.drawer:
+        _draw_toggle(surface, controls_view(ui, ExperimentConfig()).targets[0][0])
+    elif draft is not None and live is not None:
         _draw_controls(surface, lay["controls"], draft, live, fonts, ui)
     _draw_panel(surface, lay["panel"], world, name, fonts, history)
     _draw_bar(surface, lay["bar"], world, fonts, cam, ui)
@@ -409,6 +463,17 @@ def _cells(
                 )
 
 
+def _arrow(overlay, cam: Camera, centre: Vec, heading: Vec, length: float) -> None:
+    """A current: a thin arrow through ``centre`` along ``heading``."""
+    tail = cam.to_screen(add(centre, scale(heading, -length)))
+    tip = cam.to_screen(add(centre, scale(heading, length)))
+    back, side = scale(heading, -10.0), (-heading[1] * 5.0, heading[0] * 5.0)
+    wings = [add(add(tip, back), side), add(add(tip, back), scale(side, -1.0))]
+    colour = (*CURRENT, 150)
+    pygame.draw.line(overlay, colour, tail, tip, 2)
+    pygame.draw.polygon(overlay, colour, [tip, *wings])
+
+
 def _draw_map(surface, world: World, fonts, cam: Camera, ui: Ui) -> None:
     view = pygame.Rect(cam.view)
     surface.fill(OPEN_SEA, view)
@@ -426,14 +491,11 @@ def _draw_map(surface, world: World, fonts, cam: Camera, ui: Ui) -> None:
         surface.fill(colour, rect)
     overlay = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
     for cur in world.ocean.currents:
-        centre = cam.to_screen(cur.centre)
-        pygame.draw.circle(overlay, (*CURRENT, 50), centre, cur.radius * cam.zoom)
-        tip = add(cur.centre, scale(normalize(cur.velocity), cur.radius * 0.6))
-        pygame.draw.line(overlay, (*CURRENT, 180), centre, cam.to_screen(tip), 2)
+        _arrow(overlay, cam, cur.centre, normalize(cur.velocity), cur.radius * 0.5)
     for storm in world.ocean.active_storms(world.t):
         centre, radius = cam.to_screen(storm.centre), storm.radius * cam.zoom
-        pygame.draw.circle(overlay, (*STORM, 90), centre, radius)
-        pygame.draw.circle(overlay, (*STORM, 200), centre, radius, 2)
+        pygame.draw.circle(overlay, (*STORM, 70), centre, radius)
+        pygame.draw.circle(overlay, (*STORM, 170), centre, radius, 2)
     surface.blit(overlay, (0, 0))
 
     def land(r, c):
@@ -444,7 +506,7 @@ def _draw_map(surface, world: World, fonts, cam: Camera, ui: Ui) -> None:
         surface.fill(colour, rect)
 
     net = world.network
-    lane_w = max(1, round(1.5 * cam.zoom))
+    lane_w = max(1, round(1.2 * cam.zoom))
     for lane in net.lanes.values():
         if lane.a > lane.b and lane.b + ">" + lane.a in net.lanes:
             continue
@@ -454,25 +516,67 @@ def _draw_map(surface, world: World, fonts, cam: Camera, ui: Ui) -> None:
     small = fonts["s"]
     for node, pos in net.nodes.items():
         if node not in net.ports:
-            pygame.draw.circle(surface, NODE, cam.to_screen(pos), max(2, cam.zoom * 2))
+            pygame.draw.circle(
+                surface, NODE, cam.to_screen(pos), max(2, cam.zoom * 1.5)
+            )
     for port, waiting, _, _ in port_rows(world):
         pos = cam.to_screen(net.nodes[port])
         ring = GOOD if waiting < 10 else WARN if waiting < 30 else BAD
-        r = max(5.0, 7 * cam.zoom)
+        r = max(5.0, 6 * cam.zoom)
         pygame.draw.circle(surface, ring, pos, r + 3)
         pygame.draw.circle(surface, PORT, pos, r)
-        label = small.render(f"{port}  {waiting}", True, MAP_TEXT)
+        label = small.render(port, True, MAP_TEXT)
         surface.blit(label, (pos[0] + r + 5, pos[1] - label.get_height() / 2))
     for v in world.vessels.values():
         if world.convoys[v.convoy].state != "sailing":
             continue
         colour = LADEN if v.cargo else EMPTY
-        pygame.draw.circle(
-            surface, colour, cam.to_screen(v.pos), max(2.5, cam.zoom * 3)
-        )
+        r = max(4.0, cam.zoom * 3.5)
+        pygame.draw.circle(surface, OPEN_SEA, cam.to_screen(v.pos), r + 1.5)
+        pygame.draw.circle(surface, colour, cam.to_screen(v.pos), r)
     _draw_minimap(surface, world, geo, cam, view)
+    _draw_legend(surface, view, small)
     if ui.selected in world.vessels:
         _draw_dialog(surface, world, ui.selected, fonts, cam)
+
+
+LEGEND = (
+    ("ship, laden", LADEN),
+    ("ship, empty", EMPTY),
+    ("port (ring: backlog)", PORT),
+    ("lane", LANE),
+    ("lane closed", CLOSED),
+    ("storm", STORM),
+    ("current", CURRENT),
+)
+
+
+def legend(
+    view: pygame.Rect, font: pygame.font.Font
+) -> list[tuple[str, tuple[int, int, int], pygame.Rect]]:
+    """Label, colour and swatch rect of each map mark, top left of ``view``."""
+    line = font.get_height() + 6
+    size = font.get_height() - 4
+    return [
+        (label, colour, pygame.Rect(view.x + 22, view.y + 22 + i * line, size, size))
+        for i, (label, colour) in enumerate(LEGEND)
+    ]
+
+
+def _draw_legend(surface, view: pygame.Rect, font) -> None:
+    entries = legend(view, font)
+    width = max(font.size(label)[0] for label, _, _ in entries)
+    first, last = entries[0][2], entries[-1][2]
+    box = pygame.Rect(
+        first.x - 10, first.y - 10, first.width + width + 30, last.bottom - first.y + 20
+    )
+    shade = pygame.Surface(box.size, pygame.SRCALPHA)
+    shade.fill((*OPEN_SEA, 200))
+    surface.blit(shade, box)
+    for label, colour, r in entries:
+        surface.fill(colour, r)
+        text = font.render(label, True, MAP_TEXT)
+        surface.blit(text, (r.right + 10, r.centery - text.get_height() / 2))
 
 
 CLICK_SLOP = 4  # pixels a click may move and still count as a click
@@ -576,25 +680,26 @@ def _draw_panel(
         surface.blit(
             m.render(value, True, TEXT), (card.x + 8, card.y + 8 + s.get_height())
         )
-    y += 4 * (th + gap) + 4
+    y += -(-len(tiles(world)) // cols) * (th + gap) + 4
     for key, colour in SERIES.items():
         chart = pygame.Rect(x, y, w, 58)
         _sparkline(surface, chart, list(history.series[key]), colour, key, s)
         y += chart.height + gap
     y += 4
-    surface.blit(s.render("PORT     WAITING   SHIPS   QUEUED", True, MUTED), (x, y))
-    y += s.get_height() + 4
+    cols_x = (x, x + w * 0.36, x + w * 0.58, x + w * 0.78)
+    for cx, head in zip(cols_x, ("PORT", "WAITING", "SHIPS", "QUEUED"), strict=True):
+        surface.blit(s.render(head, True, MUTED), (cx, y))
+    y += s.get_height() + 6
     rows = port_rows(world)
     room = max(0, (rect.bottom - y - 140) // (s.get_height() + 2))
     for port, waiting, ships, queued in rows[:room]:
         colour = GOOD if waiting < 10 else WARN if waiting < 30 else BAD
-        surface.blit(
-            s.render(
-                f"{port:<8} {waiting:>7}   {ships:>5}   {queued:>6}", True, colour
-            ),
-            (x, y),
-        )
-        y += s.get_height() + 2
+        cells = (port, waiting, ships, queued)
+        for cx, cell, ink in zip(
+            cols_x, cells, (TEXT, colour, TEXT, TEXT), strict=True
+        ):
+            surface.blit(s.render(str(cell), True, ink), (cx, y))
+        y += s.get_height() + 4
     if len(rows) > room:
         surface.blit(
             s.render(f"... {len(rows) - room} more ports", True, MUTED), (x, y)
@@ -637,12 +742,21 @@ def _sparkline(surface, rect, values: list[float], colour, label: str, font) -> 
     pygame.draw.lines(surface, colour, False, points, 2)
 
 
+def _draw_toggle(surface, r: pygame.Rect) -> None:
+    """Three bars: the button that opens the controls."""
+    pygame.draw.rect(surface, CARD, r, border_radius=6)
+    for dy in (-6, 0, 6):
+        y = r.centery + dy
+        pygame.draw.line(surface, TEXT, (r.x + 7, y), (r.right - 8, y), 2)
+
+
 def _draw_controls(
     surface, rect, draft: ExperimentConfig, live: ExperimentConfig, fonts, ui: Ui
 ) -> None:
     s, m = fonts["s"], fonts["m"]
     view = controls_view(ui, draft)
-    surface.blit(m.render("CONTROLS", True, TEXT), (rect.x + 10, rect.y + 12))
+    surface.blit(m.render("Controls", True, TEXT), (rect.x + 10, rect.y + 12))
+    _draw_toggle(surface, view.targets[0][0])
     edited = draft != live
     for r, name, label in view.buttons:
         if name == "pause" and ui.paused:
@@ -681,10 +795,9 @@ def _draw_bar(surface, rect, world: World, fonts, cam: Camera, ui: Ui) -> None:
     pygame.draw.line(surface, RULE, rect.topleft, rect.topright)
     state = "PAUSED" if ui.paused else f"x{SPEEDS[ui.speed]}"
     text = (
-        f"t {world.t:.0f}   {state}   zoom {cam.zoom:.2f}   "
-        f"ports {len(world.network.ports)}   nodes {len(world.network.nodes)}   "
-        "drag/WASD pan · wheel/+- zoom · F fit · space pause · up/down speed · "
-        "R apply · N new seed · . step"
+        f"t {world.t:.0f}  ·  {state}  ·  {len(world.network.ports)} ports"
+        "        space pause  ·  C controls  ·  F fit  ·  R rerun  ·  N new seed"
+        "  ·  T theme"
     )
     label = fonts["s"].render(text, True, MUTED)
     surface.blit(label, (rect.x + 12, rect.centery - label.get_height() / 2))

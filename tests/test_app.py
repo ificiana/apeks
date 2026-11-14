@@ -17,7 +17,7 @@ def test_start_fits_the_whole_map_in_the_map_view() -> None:
     world, ui, cam, history = start(ExperimentConfig(seed=24008), size=(1200, 700))
     geo = world.geography
     assert ui.world_size == (geo.width, geo.height)
-    assert cam.view == tuple(layout((1200, 700))["map"])
+    assert cam.view == tuple(layout((1200, 700), False)["map"])
     x0, y0 = cam.to_screen((0.0, 0.0))
     x1, y1 = cam.to_screen((geo.width, geo.height))
     vx, vy, vw, vh = cam.view

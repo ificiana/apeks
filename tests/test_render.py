@@ -1,6 +1,7 @@
 import pygame
 import pytest
 
+import apeks.render as render
 from apeks.experiment import ExperimentConfig, build_world
 from apeks.mapgen import Geography
 from apeks.render import (
@@ -9,15 +10,14 @@ from apeks.render import (
     LADEN,
     LAND,
     OPEN_SEA,
-    PANEL,
     STORM,
-    TEXT,
     Camera,
     History,
     Ui,
     draw,
     handle_event,
     layout,
+    legend,
     pick,
     port_rows,
     ship_info,
@@ -80,13 +80,20 @@ def test_tiles_and_port_rows_summarise_the_world() -> None:
     world.closed = {"W2>W3"}
     t = dict(tiles(world))
     s = world.summary()
+    assert list(t) == [
+        "delivered",
+        "backlog",
+        "latency",
+        "near misses",
+        "congestion",
+        "llm calls",
+    ]
     assert t["delivered"] == f"{s['deliveries']} / {s['generated']}"
-    assert t["closed lanes"] == "1"
-    assert set(t) >= {"latency", "backlog", "near misses", "at sea", "llm calls"}
     assert t["llm calls"] == "1"
     rows = port_rows(world)
     assert [r[0] for r in rows] == ["P1", "P2", "P3", "P4", "P5"]
-    assert sum(r[2] for r in rows) + int(t["at sea"]) == 15
+    at_sea = sum(len(c.vessels) for c in world.convoys.values() if c.state == "sailing")
+    assert sum(r[2] for r in rows) + at_sea == 15
 
 
 def test_events_pan_zoom_fit_pause_speed_and_quit() -> None:
@@ -127,7 +134,7 @@ def test_events_pan_zoom_fit_pause_speed_and_quit() -> None:
         assert handle_event(ev(pygame.KEYDOWN, key=key), ui, cam)
         assert check(), key
     assert handle_event(ev(pygame.VIDEORESIZE, w=800, h=600, size=(800, 600)), ui, cam)
-    assert ui.size == (800, 600) and cam.view == tuple(layout((800, 600))["map"])
+    assert ui.size == (800, 600) and cam.view == tuple(layout((800, 600), False)["map"])
     assert handle_event(ev(pygame.MOUSEBUTTONDOWN, pos=(1, 1), button=3), ui, cam)
     assert handle_event(ev(pygame.ACTIVEEVENT, gain=1, state=1), ui, cam)
     assert not ui.dragging
@@ -208,13 +215,13 @@ def test_draw_handles_an_open_sea_without_history(fonts) -> None:
     draw(surface, world, "classical", fonts, cam, History(), ui)
     panel = layout(ui.size)["panel"]
     below = pygame.Rect(panel.x, panel.bottom, panel.width, 30)
-    assert all(surface.get_at(p)[:3] != TEXT for p in _pixels(below))
+    assert all(surface.get_at(p)[:3] != render.TEXT for p in _pixels(below))
     tall = pygame.Surface((900, 1400))
     ui.size = (900, 1400)
     cam.view = tuple(layout(ui.size)["map"])
     draw(tall, world, "classical", fonts, cam, History(), ui)
     panel = layout(ui.size)["panel"]
-    assert any(tall.get_at(p)[:3] == TEXT for p in _pixels(panel))
+    assert any(tall.get_at(p)[:3] == render.TEXT for p in _pixels(panel))
     assert isinstance(Geography.open_sea(1.0, 1.0), Geography)
 
 
@@ -251,7 +258,7 @@ def test_controls_view_lays_out_buttons_and_scrolls_field_rows() -> None:
     from apeks.experiment import ExperimentConfig
     from apeks.render import BUTTONS, controls_view, hit
 
-    ui = Ui(size=(1600, 900))
+    ui = Ui(size=(1600, 900), drawer=True)
     cfg = ExperimentConfig()
     view = controls_view(ui, cfg)
     names = [a[1] for _, a in view.targets if a[0] == "button"]
@@ -270,7 +277,7 @@ def test_controls_view_lays_out_buttons_and_scrolls_field_rows() -> None:
     last = [a[1] for _, a in scrolled.targets if a[0] == "edit"]
     assert last[-1] == keys[-1] and "seed" not in last
     for rect, action in scrolled.targets:
-        if action[0] != "button":
+        if action[0] not in ("button", "drawer"):
             assert scrolled.list_area.contains(rect)
 
 
@@ -279,8 +286,8 @@ def test_events_click_targets_scroll_controls_and_type_values() -> None:
     from apeks.render import controls_view
 
     pygame.init()
-    ui = Ui(size=(1600, 900))
-    cam = Camera(view=tuple(layout(ui.size)["map"]))
+    ui = Ui(size=(1600, 900), drawer=True)
+    cam = Camera(view=tuple(layout(ui.size, ui.drawer)["map"]))
     view = controls_view(ui, ExperimentConfig())
     ev = pygame.event.Event
     seed_box = next(r for r, a in view.targets if a == ("edit", "seed"))
@@ -331,8 +338,8 @@ def test_draw_shows_controls_with_edits_highlighted(fonts) -> None:
     live = ExperimentConfig(map="classic")
     world = build_world(live)
     surface = pygame.Surface((1600, 900))
-    ui = Ui(world_size=(1200.0, 800.0))
-    cam = Camera(view=tuple(layout(ui.size)["map"]))
+    ui = Ui(world_size=(1200.0, 800.0), drawer=True)
+    cam = Camera(view=tuple(layout(ui.size, ui.drawer)["map"]))
     view = controls_view(ui, live)
     seed_box = next(r for r, a in view.targets if a == ("edit", "seed"))
     row = pygame.Rect(
@@ -420,6 +427,114 @@ def test_draw_shows_the_ship_dialog(fonts) -> None:
     x, y = (int(c) for c in cam.to_screen(ship.pos))
     box = pygame.Rect(x + 12, y + 12, 40, 20).clip(pygame.Rect(cam.view))
     assert any(surface.get_at(p) != before.get_at(p) for p in _pixels(box))
-    assert any(surface.get_at(p)[:3] == PANEL for p in _pixels(pygame.Rect(cam.view)))
+    assert any(
+        surface.get_at(p)[:3] == render.PANEL for p in _pixels(pygame.Rect(cam.view))
+    )
     ui.selected = "gone"  # a ship from an old world draws nothing
     draw(surface, world, "classical", fonts, cam, History(), ui)
+
+
+def test_legend_explains_every_map_mark_inside_the_map_top_left(fonts) -> None:
+    view = pygame.Rect(330, 0, 1000, 800)
+    entries = legend(view, fonts["s"])
+    labels = [label for label, _, _ in entries]
+    assert labels == [
+        "ship, laden",
+        "ship, empty",
+        "port (ring: backlog)",
+        "lane",
+        "lane closed",
+        "storm",
+        "current",
+    ]
+    colours = {label: colour for label, colour, _ in entries}
+    assert colours["ship, laden"] == LADEN and colours["lane closed"] == CLOSED
+    swatches = [r for _, _, r in entries]
+    assert all(view.contains(r) for r in swatches)
+    assert swatches[0].x < view.x + 40 and swatches[0].y < view.y + 40
+    assert [r.y for r in swatches] == sorted(r.y for r in swatches)
+
+
+def test_draw_paints_the_legend_swatches(fonts) -> None:
+    world = build_world(ExperimentConfig(seed=24008))
+    surface = pygame.Surface((1600, 900))
+    ui = Ui(world_size=(world.geography.width, world.geography.height))
+    cam = Camera(view=tuple(layout(ui.size)["map"]))
+    cam.fit(*ui.world_size)
+    draw(surface, world, "classical", fonts, cam, History(), ui)
+    for _, colour, r in legend(pygame.Rect(cam.view), fonts["s"]):
+        assert surface.get_at(r.center)[:3] == colour
+
+
+def test_drawer_collapses_the_controls_and_widens_the_map() -> None:
+    from apeks.render import DRAWER_W, controls_view
+
+    shut, wide = layout((1600, 900), False), layout((1600, 900), True)
+    assert shut["controls"].width == DRAWER_W < wide["controls"].width
+    assert shut["map"].left == DRAWER_W and shut["map"].right == wide["map"].right
+    assert layout((1600, 900)) == wide
+    ui = Ui(size=(1600, 900))
+    assert not ui.drawer
+    view = controls_view(ui, ExperimentConfig())
+    assert [a for _, a in view.targets] == [("drawer",)]
+    assert view.buttons == [] and view.rows == []
+    ui.drawer = True
+    view = controls_view(ui, ExperimentConfig())
+    assert ("drawer",) in [a for _, a in view.targets]
+    assert any(a[0] == "edit" for _, a in view.targets)
+
+
+def test_clicking_the_drawer_or_pressing_c_toggles_it_and_moves_the_map() -> None:
+    from apeks.render import controls_view
+
+    pygame.init()
+    ui = Ui(size=(1600, 900))
+    cam = Camera(view=tuple(layout(ui.size, ui.drawer)["map"]))
+    toggle = controls_view(ui, ExperimentConfig()).targets[0][0]
+    ev = pygame.event.Event
+    view = controls_view(ui, ExperimentConfig())
+    handle_event(ev(pygame.MOUSEBUTTONDOWN, pos=toggle.center, button=1), ui, cam, view)
+    assert ui.drawer and cam.view == tuple(layout(ui.size, True)["map"])
+    assert ui.actions == [] and not ui.dragging
+    handle_event(ev(pygame.KEYDOWN, key=pygame.K_c, unicode="c"), ui, cam)
+    assert not ui.drawer and cam.view == tuple(layout(ui.size, False)["map"])
+    handle_event(ev(pygame.VIDEORESIZE, w=1200, h=700, size=(1200, 700)), ui, cam)
+    assert cam.view == tuple(layout((1200, 700), False)["map"])
+    pygame.quit()
+
+
+def test_draw_with_the_drawer_shut_paints_the_toggle(fonts) -> None:
+    from apeks.render import controls_view
+
+    live = ExperimentConfig(map="classic")
+    world = build_world(live)
+    surface = pygame.Surface((1600, 900))
+    ui = Ui(world_size=(1200.0, 800.0))
+    cam = Camera(view=tuple(layout(ui.size, ui.drawer)["map"]))
+    draw(surface, world, "classic", fonts, cam, History(), ui, live, live)
+    toggle = controls_view(ui, live).targets[0][0]
+    assert render.TEXT in {surface.get_at(p)[:3] for p in _pixels(toggle)}
+    ui.drawer = True  # open, but nothing to edit: the column stays blank
+    draw(surface, world, "classic", fonts, cam, History(), ui)
+    assert render.TEXT not in {surface.get_at(p)[:3] for p in _pixels(toggle)}
+
+
+def test_dark_theme_by_default_and_t_switches_to_light() -> None:
+    world = build_world(ExperimentConfig(map="classic", llm="", model=""))
+    ui = Ui(size=(1200, 700))
+    cam = Camera(view=tuple(layout(ui.size, ui.drawer)["map"]))
+    pygame.font.init()
+    fonts = {k: pygame.font.Font(None, 16) for k in "sml"}
+    surface = pygame.Surface(ui.size)
+    controls = layout(ui.size, ui.drawer)["controls"]
+    corner = (5, controls.bottom - 5)
+    assert ui.theme == "dark"
+    draw(surface, world, "t", fonts, cam, History(), ui)
+    assert surface.get_at(corner)[:3] == render.THEMES["dark"]["PANEL"]
+    handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_t), ui, cam)
+    assert ui.theme == "light"
+    draw(surface, world, "t", fonts, cam, History(), ui)
+    assert surface.get_at(corner)[:3] == render.THEMES["light"]["PANEL"]
+    handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_t), ui, cam)
+    assert ui.theme == "dark"
+    render.use_theme("light")

@@ -47,7 +47,7 @@ def start(
     world = build_world(cfg)
     geo = world.geography
     ui = Ui(size=size, world_size=(geo.width, geo.height))
-    cam = Camera(view=tuple(layout(size)["map"]))
+    cam = Camera(view=tuple(layout(size, ui.drawer)["map"]))
     cam.fit(*ui.world_size)
     history = History()
     history.record(world)
@@ -169,7 +169,7 @@ class Session:
         self.live, self.world = cfg, world
         self.ui.selected = None
         self.ui.world_size = (geo.width, geo.height)
-        self.cam = Camera(view=tuple(layout(self.ui.size)["map"]))
+        self.cam = Camera(view=tuple(layout(self.ui.size, self.ui.drawer)["map"]))
         self.cam.fit(*self.ui.world_size)
         self.history = History()
         self.history.record(world)
@@ -275,8 +275,8 @@ def main(argv: list[str] | None = None) -> None:  # pragma: no cover
     screen = pygame.display.set_mode(session.ui.size, pygame.RESIZABLE)
     pygame.display.set_caption("apeks")
     fonts = {
-        k: pygame.font.SysFont("dejavusansmono,menlo,consolas,monospace", n)
-        for k, n in (("s", 13), ("m", 17), ("l", 24))
+        k: pygame.font.SysFont("inter,helvetica,arial,dejavusans,sans", n)
+        for k, n in (("s", 14), ("m", 18), ("l", 26))
     }
     clock = pygame.time.Clock()
     running = True

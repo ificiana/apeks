@@ -87,13 +87,24 @@ def test_seed_list_expands_to_one_config_per_seed(tmp_path: Path) -> None:
     assert [(c.name, c.seed) for c in load_configs(single)] == [("one", 3)]
 
 
-def test_sweep_arms_cover_seeds_0_to_49() -> None:
+def test_sweep_arms_cross_every_listed_value_from_seed_0() -> None:
+    import itertools
+    import tomllib
+    from dataclasses import replace
+
     for name in ["classical", "llm", "llm_routing", "llm_formation"]:
+        data = tomllib.loads((ARMS / f"{name}_sweep.toml").read_text())
+        seeds = data["seed"]
+        assert seeds == list(range(len(seeds)))
+        ports = data.get("ports")
         cfgs = load_configs(ARMS / f"{name}_sweep.toml")
-        assert [c.seed for c in cfgs] == list(range(50))
-        assert cfgs[0].name == f"{name}_s0"
+        expected = list(itertools.product(ports or [None], seeds))
+        assert [(c.ports if ports else None, c.seed) for c in cfgs] == expected
+        tag = f"_p{ports[0]}" if ports else ""
+        assert cfgs[0].name == f"{name}{tag}_s0"
         base = load_config(ARMS / f"{name}.toml")
-        assert cfgs[0] == base.__class__(**{**base.__dict__, "name": f"{name}_s0"})
+        swept = {"ports": ports[0]} if ports else {}
+        assert cfgs[0] == replace(base, name=cfgs[0].name, seed=0, **swept)
 
 
 def test_make_client_picks_backend() -> None:
